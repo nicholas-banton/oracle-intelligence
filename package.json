@@ -1,0 +1,15 @@
+{
+  "name": "oracle-intelligence",
+  "version": "1.0.0",
+  "description": "Oracle — Strategic Intelligence Engine for the Apex Trading System",
+  "main": "oracle.js",
+  "scripts": {
+    "start": "node oracle.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "author": "Nicholas",
+  "license": "UNLICENSED",
+  "private": true
+}
