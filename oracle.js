@@ -36,7 +36,7 @@ const CONFIG = {
   ALPACA_SECRET_KEY: process.env.ALPACA_SECRET_KEY,
   ALPACA_PAPER:      process.env.ALPACA_PAPER !== "false",
   RESEND_KEY:        process.env.RESEND_KEY,
-  EMAIL_FROM:        process.env.EMAIL_FROM || "oracle@coraemjen.resend.app",
+  EMAIL_FROM:        process.env.EMAIL_FROM || "onboarding@resend.dev",
   EMAIL_TO:          process.env.EMAIL_TO   || "nicholas@coraemjen.com",
   PORT:              process.env.PORT || 8080,
 };
