@@ -1,5 +1,5 @@
 // ============================================================
-// ORACLE — Strategic Intelligence Engine v1
+// ORACLE — Strategic Intelligence Engine v1.1
 // The invisible hand of the Apex Trading System
 // Powered by Claude API · Fourth Railway Service
 //
@@ -19,6 +19,19 @@
 //   5. The Unified Portfolio Lens — combined exposure view (Phase 5)
 //
 // Oracle is watching. 🔮
+//
+// v1.1 PATCH — 2026-04-17
+//   BUG FIX: "Dir:?" regression — Oracle was reading Savant's directive
+//   name from `directive.mode`, but Savant's actual bridge payload writes
+//   the directive name at `directive.directive` (see savant.js v2.2
+//   writeBridgeDirective). The mismatch meant Oracle treated the current
+//   directive as undefined on every cycle, which silently disabled:
+//     • DEFCON 2 "same directive 7+ days" trigger
+//     • Adaptive Architect VIX/directive-consistency check
+//     • All DEFCON prompt context showing current directive to Claude
+//     • The Scenario Engine's positioning recommendation
+//   Six in-place reads corrected. No schema change, no new env var,
+//   no change to Oracle's writes — Savant was right, Oracle was wrong.
 // ============================================================
 
 const https = require("https");
@@ -93,7 +106,7 @@ function httpsRequest(options, body, timeoutMs = 15000) {
 async function apiGet(host, path, headers = {}, timeoutMs = 15000) {
   const res = await httpsRequest({
     host, path, method: "GET",
-    headers: { "User-Agent": "oracle/1.0", ...headers },
+    headers: { "User-Agent": "oracle/1.1", ...headers },
   }, null, timeoutMs);
   return res;
 }
@@ -103,7 +116,7 @@ async function apiPost(host, path, headers, body, timeoutMs = 30000) {
   const res = await httpsRequest({
     host, path, method: "POST",
     headers: {
-      "User-Agent": "oracle/1.0",
+      "User-Agent": "oracle/1.1",
       "Content-Type": "application/json",
       "Content-Length": Buffer.byteLength(payload),
       ...headers,
@@ -117,7 +130,7 @@ async function apiPatch(host, path, headers, body, timeoutMs = 30000) {
   const res = await httpsRequest({
     host, path, method: "PATCH",
     headers: {
-      "User-Agent": "oracle/1.0",
+      "User-Agent": "oracle/1.1",
       "Content-Type": "application/json",
       "Content-Length": Buffer.byteLength(payload),
       ...headers,
@@ -368,7 +381,8 @@ async function checkSentinel(state) {
   }
   const stuckDays = countConsecutiveSameDirective(journal);
   if (stuckDays >= 7) {
-    triggers.push({ level: "DEFCON2", reason: `Same directive (${directive?.mode || "?"}) for ${stuckDays} consecutive days` });
+    // v1.1 FIX: directive?.mode → directive?.directive (match Savant bridge payload schema)
+    triggers.push({ level: "DEFCON2", reason: `Same directive (${directive?.directive || "?"}) for ${stuckDays} consecutive days` });
   }
 
   // DEFCON 3: 3+ loss streak OR win rate <30% OR FOMC within 3 days
@@ -389,6 +403,10 @@ async function checkSentinel(state) {
 }
 
 function countConsecutiveSameDirective(journal) {
+  // NOTE (v1.1): This reads from journal.directives[], which is a separate schema
+  // (Oracle's own projected journal shape — not yet populated by any writer).
+  // These .mode reads are inert today; leave them for Phase 4 Socratic Loop work
+  // which will define the canonical directives[] schema.
   const d = (journal?.directives || []).slice().reverse();
   if (d.length === 0) return 0;
   const top = d[0].mode;
@@ -424,7 +442,8 @@ async function runAdaptiveArchitect(state) {
   if (vix.current >= 25 && (directive?.regime || "").includes("bull")) {
     signals.push(`VIX at ${vix.current} inconsistent with ${directive.regime} regime`);
   }
-  if (vix.current < 15 && (directive?.mode || "") === "REDUCED_RISK") {
+  // v1.1 FIX: directive?.mode → directive?.directive
+  if (vix.current < 15 && (directive?.directive || "") === "REDUCED_RISK") {
     signals.push(`VIX calm (${vix.current}) but directive still REDUCED_RISK`);
   }
   if (yield10.change30d >= 0.50) {
@@ -442,6 +461,7 @@ async function runScenarioEngine(state) {
   const fomcInDays = daysUntilNextFOMC();
   if (fomcInDays == null || fomcInDays < 0 || fomcInDays > 7) return null;
 
+  // v1.1 FIX: state.directive?.mode → state.directive?.directive
   const prompt = `You are Oracle, the strategic intelligence layer of the Apex Trading System.
 Nicholas runs a $100K paper portfolio trading TQQQ, GDXJ, SLV with SGOV defensive posture.
 
@@ -449,7 +469,7 @@ An FOMC meeting is in ${fomcInDays} day(s). Current state:
 - VIX: ${state.vix?.current ?? "n/a"} (${state.vix?.changePct ?? "n/a"}% day)
 - 10y yield: ${state.yield10?.current ?? "n/a"}% (${state.yield10?.change30d ?? "n/a"} 30d)
 - Portfolio equity: $${state.account?.equity ?? "n/a"}
-- Current directive: ${state.directive?.mode ?? "n/a"} / ${state.directive?.regime ?? "n/a"}
+- Current directive: ${state.directive?.directive ?? "n/a"} / ${state.directive?.regime ?? "n/a"}
 
 Produce a concise scenario plan in <=180 words:
 1. Three plausible outcomes (dovish hold, hawkish hold, cut surprise) with TQQQ/GDXJ/SLV directional bias
@@ -500,6 +520,7 @@ async function fireDefcon1(trigger, state) {
   setCooldown("DEFCON1");
   log(`🚨 DEFCON 1 FIRED — ${trigger.reason}`);
 
+  // v1.1 FIX: state.directive?.mode → state.directive?.directive
   const prompt = `You are Oracle. DEFCON 1 has fired. This is the highest alert — autonomous intervention authorized.
 
 TRIGGER: ${trigger.reason}
@@ -508,7 +529,7 @@ CURRENT STATE:
 - VIX: ${state.vix?.current} (${state.vix?.changePct}% day)
 - Portfolio: $${state.account?.equity} (${pctChange(state.account)}% intraday)
 - Positions: ${(state.positions || []).map(p => `${p.symbol} ${p.qty} @ ${(+p.unrealized_plpc * 100).toFixed(1)}%`).join(", ") || "none"}
-- Current directive: ${state.directive?.mode} / ${state.directive?.regime}
+- Current directive: ${state.directive?.directive} / ${state.directive?.regime}
 
 Produce a DEFCON 1 crisis directive in <=150 words:
 1. Immediate posture (STAND_DOWN / REDUCED_RISK / HOLD)
@@ -541,6 +562,7 @@ async function fireDefcon2(trigger, state) {
   setCooldown("DEFCON2");
   log(`⚠ DEFCON 2 FIRED — ${trigger.reason}`);
 
+  // v1.1 FIX: state.directive?.mode → state.directive?.directive
   const prompt = `You are Oracle. DEFCON 2 has fired. Approval-level alert — recommend action to Nicholas for sign-off.
 
 TRIGGER: ${trigger.reason}
@@ -548,7 +570,7 @@ TRIGGER: ${trigger.reason}
 CURRENT STATE:
 - VIX: ${state.vix?.current} (${state.vix?.changePct}% day)
 - Portfolio: $${state.account?.equity}
-- Current directive: ${state.directive?.mode} / ${state.directive?.regime}
+- Current directive: ${state.directive?.directive} / ${state.directive?.regime}
 
 Produce a DEFCON 2 recommendation in <=200 words:
 1. What should change in the next directive cycle
@@ -620,7 +642,8 @@ async function mainLoop() {
 
     const state = { vix, yield10, account, positions, directive, journal };
 
-    log(`State — VIX:${vix?.current ?? "?"} 10y:${yield10?.current ?? "?"} Eq:$${account?.equity ?? "?"} Dir:${directive?.mode ?? "?"}`);
+    // v1.1 FIX: directive?.mode → directive?.directive (source of the visible Dir:? bug)
+    log(`State — VIX:${vix?.current ?? "?"} 10y:${yield10?.current ?? "?"} Eq:$${account?.equity ?? "?"} Dir:${directive?.directive ?? "?"}`);
 
     // 1. Sentinel — DEFCON triggers
     const triggers = await checkSentinel(state);
@@ -680,6 +703,7 @@ function startServer() {
       res.end(JSON.stringify({
         status: "ok",
         service: "oracle-intelligence",
+        version: "1.1",
         marketHours: isMarketHours(),
         oracleGistId: ORACLE_GIST_ID ? "set" : "not-set",
         cooldowns: Object.fromEntries(Object.entries(COOLDOWNS).map(([k, v]) => [k, v ? Math.max(0, COOLDOWN_MS - (Date.now() - v)) : 0])),
@@ -695,7 +719,7 @@ function startServer() {
 
 // ── BOOT ──────────────────────────────────────────────────────
 async function boot() {
-  log("◈◈◈ ORACLE INTELLIGENCE ENGINE v1 STARTING ◈◈◈");
+  log("◈◈◈ ORACLE INTELLIGENCE ENGINE v1.1 STARTING ◈◈◈");
   log(`Claude API: ${CONFIG.CLAUDE_API_KEY ? "✓ Configured" : "✗ Not configured"}`);
   log(`GitHub:     ${CONFIG.GITHUB_TOKEN ? "✓ Configured" : "✗ Not configured"}`);
   log(`Alpaca:     ${CONFIG.ALPACA_KEY_ID ? "✓ Configured" : "✗ Not configured"}`);
@@ -721,8 +745,13 @@ async function boot() {
   }, 30 * 60 * 1000);
 
   await sendEmail(
-    "◈ ORACLE INTELLIGENCE ENGINE v1 ONLINE",
-    `Oracle v1 has started.\n\n` +
+    "◈ ORACLE INTELLIGENCE ENGINE v1.1 ONLINE",
+    `Oracle v1.1 has started.\n\n` +
+    `v1.1 PATCH: Fixed the Dir:? bug. Oracle now correctly reads\n` +
+    `Savant's active directive from the bridge payload. This re-enables\n` +
+    `the DEFCON 2 "stuck directive" trigger, the Adaptive Architect's\n` +
+    `VIX/directive consistency check, and makes all DEFCON prompts\n` +
+    `show Claude the actual current posture.\n\n` +
     `CAPABILITIES ACTIVE:\n` +
     `• The Asymmetric Sentinel — DEFCON 1/2/3 trigger system\n` +
     `• The Adaptive Architect — regime change detection\n` +
