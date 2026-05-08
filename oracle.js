@@ -1,5 +1,5 @@
 // ============================================================
-// ORACLE — Strategic Intelligence Engine v1.1
+// // ORACLE — Strategic Intelligence Engine v1.2
 // The invisible hand of the Apex Trading System
 // Powered by Claude API · Fourth Railway Service
 //
