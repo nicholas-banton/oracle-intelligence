@@ -1,5 +1,5 @@
 // ============================================================
-// ORACLE — Strategic Intelligence Engine v1.2
+// ORACLE — Strategic Intelligence Engine v1.2.1
 // The invisible hand of the Apex Trading System
 // Powered by Claude API · Fourth Railway Service
 //
@@ -43,6 +43,14 @@
 //   remains compatible.
 //   No Bot logic, order logic, bridge schema, env vars, or trading execution
 //   behavior changed in this release.
+//
+// v1.2.1 PATCH — 2026-05-08
+//   BASELINE CONTEXT BOOTSTRAP: Oracle now creates a calm baseline
+//   oracle-context.json when GITHUB_ORACLE_ID is blank and no DEFCON,
+//   Scenario, or Architect event fires. If an existing context is stale,
+//   Oracle refreshes the calm baseline without overwriting active alerts.
+//   This makes the Oracle → Savant bridge explicit and testable before
+//   the next trading session while preserving Savant v2.2 compatibility.
 // ============================================================
 
 const https = require("https");
@@ -69,7 +77,7 @@ const ALPACA_HOST = CONFIG.ALPACA_PAPER
   ? "paper-api.alpaca.markets"
   : "api.alpaca.markets";
 
-const ORACLE_VERSION = "1.2";
+const ORACLE_VERSION = "1.2.1";
 
 const ORACLE_SYSTEM_PROMPT = `You are Oracle, the strategic intelligence meta-layer of the Apex Trading System.
 
@@ -248,6 +256,88 @@ async function writeOracleContext(ctx) {
     await writeGist(ORACLE_GIST_ID, "oracle-context.json", content);
   }
   return ORACLE_GIST_ID;
+}
+
+function hoursSinceTimestamp(ts) {
+  if (!ts) return Infinity;
+  const t = new Date(ts).getTime();
+  if (!Number.isFinite(t)) return Infinity;
+  return (Date.now() - t) / (1000 * 60 * 60);
+}
+
+function buildBaselineOracleContext(state, reason) {
+  const directiveName = state.directive?.directive || null;
+  const regimeName = state.directive?.regime || "unknown";
+  const equity = state.account?.equity || null;
+
+  return {
+    contextType: "baseline",
+    oracleVersion: ORACLE_VERSION,
+    status: "normal_watch",
+    baselineReason: reason,
+
+    // Keep defconLevel null for Savant v2.2 compatibility. If set to 5,
+    // current Savant formatting would label it as an active DEFCON event.
+    defconLevel: null,
+    defconTrigger: null,
+    defconDirective: null,
+
+    regime: {
+      current: regimeName,
+      confidence: directiveName ? 0.55 : 0.25,
+      reasoning: directiveName
+        ? `Baseline read: Savant's current directive is ${directiveName} in ${regimeName} regime. Oracle has no active DEFCON, Scenario, or Architect alert in this cycle.`
+        : "Baseline read: Oracle has no current Savant directive available and no active DEFCON, Scenario, or Architect alert in this cycle.",
+      keySignals: [
+        state.vix?.current != null ? `VIX ${state.vix.current}` : "VIX unavailable",
+        state.yield10?.current != null ? `10y yield ${state.yield10.current}` : "10y yield unavailable",
+        equity ? `Equity $${equity}` : "Equity unavailable",
+        directiveName ? `Directive ${directiveName}` : "Directive unavailable",
+      ],
+    },
+
+    strategicFrame:
+      "No active DEFCON, Scenario, or Architect signal. Oracle remains in normal watch. The absence of an alarm is not a reason to abandon process discipline.",
+
+    topConviction: {
+      tenet: 1,
+      statement: "Drawdowns kill compounding. Protect the compound.",
+      actionImplication:
+        "Maintain survivable sizing and do not increase risk simply because conditions appear calm.",
+    },
+
+    architectSignals: [],
+    architectRecommendation: null,
+    scenarioPlan: null,
+    scenarioEvent: null,
+    vix: state.vix,
+    yield10: state.yield10,
+    equity,
+    directive: directiveName,
+  };
+}
+
+async function ensureBaselineOracleContext(state, contextWriteOccurred) {
+  if (contextWriteOccurred) return null;
+
+  const existing = await readOracleContext();
+  const staleHours = hoursSinceTimestamp(existing?.updatedAt);
+  const needsBootstrap = !ORACLE_GIST_ID || !existing;
+  const needsRefresh = staleHours > 26;
+
+  if (!needsBootstrap && !needsRefresh) {
+    log(`Oracle baseline: existing context fresh (${staleHours.toFixed(1)}h old) — no write needed`);
+    return null;
+  }
+
+  const reason = needsBootstrap
+    ? "bootstrap_no_oracle_context"
+    : `refresh_stale_context_${staleHours.toFixed(1)}h`;
+
+  const baseline = buildBaselineOracleContext(state, reason);
+  const gistId = await writeOracleContext(baseline);
+  log(`🔮 Oracle baseline context ${needsBootstrap ? "bootstrapped" : "refreshed"} — ${reason}`);
+  return gistId;
 }
 
 // ── DATA FETCHERS ─────────────────────────────────────────────
@@ -686,6 +776,8 @@ async function mainLoop() {
     // v1.1 FIX: directive?.mode → directive?.directive (source of the visible Dir:? bug)
     log(`State — VIX:${vix?.current ?? "?"} 10y:${yield10?.current ?? "?"} Eq:$${account?.equity ?? "?"} Dir:${directive?.directive ?? "?"}`);
 
+    let contextWriteOccurred = false;
+
     // 1. Asymmetric Sentinel — DEFCON triggers
     const triggers = await checkSentinel(state);
     if (triggers.length > 0) {
@@ -696,6 +788,7 @@ async function mainLoop() {
       if (byLevel.DEFCON1.length) await fireDefcon1(byLevel.DEFCON1[0], state);
       else if (byLevel.DEFCON2.length) await fireDefcon2(byLevel.DEFCON2[0], state);
       else if (byLevel.DEFCON3.length) await fireDefcon3(byLevel.DEFCON3[0], state);
+      contextWriteOccurred = true;
     } else {
       log("Asymmetric Sentinel: all clear");
     }
@@ -710,6 +803,7 @@ async function mainLoop() {
         vix, yield10,
         equity: account?.equity,
       });
+      contextWriteOccurred = true;
     }
 
     // 3. Scenario Engine (FOMC within 7 days)
@@ -722,13 +816,25 @@ async function mainLoop() {
         vix, yield10,
         equity: account?.equity,
       });
+      contextWriteOccurred = true;
       await sendEmail(
         `🎯 ORACLE SCENARIO — FOMC in ${scen.fomcInDays}d`,
-        `SCENARIO ENGINE — PRE-GAMING\n\nEvent: FOMC in ${scen.fomcInDays} day(s)\n\n${scen.plan}\n\n${etNow().toLocaleString()} ET\nOracle is watching.`
+        `SCENARIO ENGINE — PRE-GAMING
+
+Event: FOMC in ${scen.fomcInDays} day(s)
+
+${scen.plan}
+
+${etNow().toLocaleString()} ET
+Oracle is watching.`
       );
     }
 
-    // 4. Socratic Loop (Phase 4 — deferred)
+    // 4. Baseline Context Bootstrap — keep Oracle → Savant bridge testable
+    // even when no DEFCON, Architect, or Scenario event fires.
+    await ensureBaselineOracleContext(state, contextWriteOccurred);
+
+    // 5. Socratic Loop (Phase 4 — deferred)
     await runSocraticLoop(state);
 
   } catch (e) {
@@ -767,7 +873,7 @@ async function boot() {
   log(`Email:      ${CONFIG.RESEND_KEY ? "✓ Configured" : "✗ Not configured"}`);
   log(`Bridge:     ${CONFIG.GITHUB_GIST_ID ? "✓ Connected" : "⚠ GITHUB_GIST_ID not set"}`);
   log(`Journal:    ${CONFIG.GITHUB_JOURNAL_ID ? "✓ Connected" : "⚠ GITHUB_JOURNAL_ID not set"}`);
-  log(`Oracle ctx: ${ORACLE_GIST_ID ? "✓ Connected" : "⚠ Will create on first fire"}`);
+  log(`Oracle ctx: ${ORACLE_GIST_ID ? "✓ Connected" : "⚠ Will bootstrap baseline context on first cycle"}`);
   log(`Cadence:    Market hours 5min · After hours 30min · 4hr DEFCON cooldowns`);
 
   startServer();
@@ -788,6 +894,9 @@ async function boot() {
   await sendEmail(
     `◈ ORACLE INTELLIGENCE ENGINE v${ORACLE_VERSION} ONLINE`,
     `Oracle v${ORACLE_VERSION} has started.\n\n` +
+    `v1.2.1 PATCH: Baseline context bootstrap is active. Oracle will\n` +
+    `create oracle-context.json on startup when no GITHUB_ORACLE_ID exists,\n` +
+    `or refresh a stale calm baseline without overwriting active alerts.\n\n` +
     `v1.2 PATCH: Architecture alignment release. Oracle is now explicitly\n` +
     `grounded as the strategic meta-intelligence layer above Savant,\n` +
     `Marshall, and AlpacaBot. Sentinel remains one module inside Oracle,\n` +
@@ -806,7 +915,7 @@ async function boot() {
     `DEFCON 1: VIX +20% spike OR portfolio -3% intraday\n` +
     `DEFCON 2: VIX crosses 25 OR portfolio -2% OR same directive 7+ days\n` +
     `DEFCON 3: 3+ loss streak OR win rate <30% OR FOMC within 3 days\n\n` +
-    `NOTE: Full DEFCON 2 approval-token gating is not implemented in v1.2;\n` +
+    `NOTE: Full DEFCON 2 approval-token gating is not implemented in v1.2.1;\n` +
     `current behavior preserves advisory context write + email notification.\n\n` +
     `No Bot logic, order logic, bridge schema, env vars, or trading execution\n` +
     `behavior changed in this release.\n\n` +
