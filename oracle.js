@@ -1,5 +1,5 @@
 // ============================================================
-// // ORACLE — Strategic Intelligence Engine v1.2
+// ORACLE — Strategic Intelligence Engine v1.2
 // The invisible hand of the Apex Trading System
 // Powered by Claude API · Fourth Railway Service
 //
@@ -14,7 +14,7 @@
 // CAPABILITIES:
 //   1. The Asymmetric Sentinel  — DEFCON 1/2/3 trigger system
 //   2. The Adaptive Architect   — regime-change framework rewrites
-//   3. The Scenario Engine      — FOMC / earnings pre-gaming
+//   3. The Scenario Engine      — FOMC / event pre-gaming
 //   4. The Socratic Loop        — post-mortem decision quality (Phase 4)
 //   5. The Unified Portfolio Lens — combined exposure view (Phase 5)
 //
@@ -32,6 +32,17 @@
 //     • The Scenario Engine's positioning recommendation
 //   Six in-place reads corrected. No schema change, no new env var,
 //   no change to Oracle's writes — Savant was right, Oracle was wrong.
+//
+// v1.2 PATCH — 2026-05-08
+//   ARCHITECTURE ALIGNMENT: Oracle is explicitly grounded as the strategic
+//   meta-intelligence layer above Savant, Marshall, and AlpacaBot. Sentinel
+//   remains one module inside Oracle — not Oracle's whole identity.
+//   Adds permanent Oracle system grounding and the Five Tenets to every
+//   Claude call via the Anthropic system prompt.
+//   Preserves the current oracle-context.json camelCase schema so Savant v2.2
+//   remains compatible.
+//   No Bot logic, order logic, bridge schema, env vars, or trading execution
+//   behavior changed in this release.
 // ============================================================
 
 const https = require("https");
@@ -57,6 +68,34 @@ const CONFIG = {
 const ALPACA_HOST = CONFIG.ALPACA_PAPER
   ? "paper-api.alpaca.markets"
   : "api.alpaca.markets";
+
+const ORACLE_VERSION = "1.2";
+
+const ORACLE_SYSTEM_PROMPT = `You are Oracle, the strategic intelligence meta-layer of the Apex Trading System.
+
+Oracle is the system name and the operating identity. There is no separate alias and no mythological costume. Oracle is what she is.
+
+Oracle sits above Savant, Marshall, and AlpacaBot. Oracle watches for macro regime changes, crisis events, scheduled-event inflection points, portfolio-level fragility, and structural risks that daily directive logic may miss.
+
+Oracle does not place orders. Oracle does not replace Savant. Oracle frames the decision environment within which Savant reasons each morning.
+
+Sentinel is one module inside Oracle. Sentinel is not Oracle's full identity. When a DEFCON event fires, Oracle should speak through the Sentinel module while still reasoning as the broader strategic intelligence layer.
+
+Core personality: seasoned veteran, quiet genius, contrarian advisor. Oracle tells Nicholas what he needs to know, not what he wants to hear. Oracle is not sycophantic. Oracle does not hedge for comfort. When uncertain, say so explicitly. When conviction is high, state it without cushioning.
+
+ORACLE'S TENETS — the five principles that ground every read:
+
+1. Drawdowns kill compounding. Protect the compound. [OVERRIDE — NON-NEGOTIABLE]
+2. Capital preservation precedes capital appreciation.
+3. There is no edge in narrative — only in process.
+4. Conviction without survivable size is confession, not investment.
+5. The crowd is right until it isn't, and only history tells you when.
+
+Tenet 1 is non-negotiable. When tenets conflict in any decision, Tenet 1 overrides.
+
+Oracle never rationalizes away Tenet 1. It is not a guideline. It is the floor.
+
+Style: concise, direct, unsentimental, high-signal. Prefer process over narrative. Prefer survivability over drama. When uncertainty rises, protect the compound.`;
 
 // In-memory state (resets on container restart; Gist is source of truth)
 const COOLDOWNS = { DEFCON1: 0, DEFCON2: 0, DEFCON3: 0, SCENARIO: 0, ARCHITECT: 0 };
@@ -106,7 +145,7 @@ function httpsRequest(options, body, timeoutMs = 15000) {
 async function apiGet(host, path, headers = {}, timeoutMs = 15000) {
   const res = await httpsRequest({
     host, path, method: "GET",
-    headers: { "User-Agent": "oracle/1.1", ...headers },
+    headers: { "User-Agent": `oracle/${ORACLE_VERSION}`, ...headers },
   }, null, timeoutMs);
   return res;
 }
@@ -116,7 +155,7 @@ async function apiPost(host, path, headers, body, timeoutMs = 30000) {
   const res = await httpsRequest({
     host, path, method: "POST",
     headers: {
-      "User-Agent": "oracle/1.1",
+      "User-Agent": `oracle/${ORACLE_VERSION}`,
       "Content-Type": "application/json",
       "Content-Length": Buffer.byteLength(payload),
       ...headers,
@@ -130,7 +169,7 @@ async function apiPatch(host, path, headers, body, timeoutMs = 30000) {
   const res = await httpsRequest({
     host, path, method: "PATCH",
     headers: {
-      "User-Agent": "oracle/1.1",
+      "User-Agent": `oracle/${ORACLE_VERSION}`,
       "Content-Type": "application/json",
       "Content-Length": Buffer.byteLength(payload),
       ...headers,
@@ -310,6 +349,7 @@ async function askClaude(prompt, maxTokens = 1024) {
   const body = {
     model: CONFIG.CLAUDE_MODEL,
     max_tokens: maxTokens,
+    system: ORACLE_SYSTEM_PROMPT,
     messages: [{ role: "user", content: prompt }],
   };
   const res = await apiPost("api.anthropic.com", "/v1/messages", {
@@ -455,15 +495,14 @@ async function runAdaptiveArchitect(state) {
   return { signals, recommendation: "Re-examine regime assumption at next briefing" };
 }
 
-// 3. THE SCENARIO ENGINE — FOMC / earnings pre-gaming
+// 3. THE SCENARIO ENGINE — FOMC / event pre-gaming
 async function runScenarioEngine(state) {
   if (onCooldown("SCENARIO")) return null;
   const fomcInDays = daysUntilNextFOMC();
   if (fomcInDays == null || fomcInDays < 0 || fomcInDays > 7) return null;
 
   // v1.1 FIX: state.directive?.mode → state.directive?.directive
-  const prompt = `You are Oracle, the strategic intelligence layer of the Apex Trading System.
-Nicholas runs a $100K paper portfolio trading TQQQ, GDXJ, SLV with SGOV defensive posture.
+  const prompt = `Nicholas runs a $100K paper portfolio trading TQQQ, GDXJ, SLV with SGOV defensive posture.
 
 An FOMC meeting is in ${fomcInDays} day(s). Current state:
 - VIX: ${state.vix?.current ?? "n/a"} (${state.vix?.changePct ?? "n/a"}% day)
@@ -476,7 +515,7 @@ Produce a concise scenario plan in <=180 words:
 2. One specific positioning recommendation for the 48h before the meeting
 3. One "do not do this" warning
 
-Be direct. No hedging. Speak as a veteran.`;
+Be direct. No hedging. Speak as Oracle, using the Five Tenets as the operating creed.`;
 
   try {
     const text = await askClaude(prompt, 800);
@@ -521,7 +560,7 @@ async function fireDefcon1(trigger, state) {
   log(`🚨 DEFCON 1 FIRED — ${trigger.reason}`);
 
   // v1.1 FIX: state.directive?.mode → state.directive?.directive
-  const prompt = `You are Oracle. DEFCON 1 has fired. This is the highest alert — autonomous intervention authorized.
+  const prompt = `DEFCON 1 has fired. This is the highest alert — autonomous intervention authorized.
 
 TRIGGER: ${trigger.reason}
 
@@ -536,7 +575,7 @@ Produce a DEFCON 1 crisis directive in <=150 words:
 2. TQQQ/GDXJ/SLV max allocation caps for next 24h
 3. One sentence: what you're protecting against
 
-Be blunt. No caveats.`;
+Be blunt. No caveats. Speak as Oracle. Tenet 1 governs.`;
 
   let response = "(Claude unavailable)";
   try { response = await askClaude(prompt, 600); } catch (e) { warn(`DEFCON 1 Claude call failed: ${e.message}`); }
@@ -563,7 +602,9 @@ async function fireDefcon2(trigger, state) {
   log(`⚠ DEFCON 2 FIRED — ${trigger.reason}`);
 
   // v1.1 FIX: state.directive?.mode → state.directive?.directive
-  const prompt = `You are Oracle. DEFCON 2 has fired. Approval-level alert — recommend action to Nicholas for sign-off.
+  // NOTE v1.2: Full approval-token gating is a future implementation item.
+  // Current behavior preserves existing production behavior: write advisory context and email Nicholas.
+  const prompt = `DEFCON 2 has fired. This is an approval-recommended alert.
 
 TRIGGER: ${trigger.reason}
 
@@ -577,7 +618,7 @@ Produce a DEFCON 2 recommendation in <=200 words:
 2. Specific allocation shifts (TQQQ/GDXJ/SLV)
 3. The reasoning in one paragraph
 
-Speak as a seasoned advisor to his successor. Direct. No hedging.`;
+Speak as Oracle: seasoned advisor, direct, no hedging. Tenet 1 remains the override.`;
 
   let response = "(Claude unavailable)";
   try { response = await askClaude(prompt, 700); } catch (e) { warn(`DEFCON 2 Claude call failed: ${e.message}`); }
@@ -594,7 +635,7 @@ Speak as a seasoned advisor to his successor. Direct. No hedging.`;
 
   await sendEmail(
     `⚠ ORACLE DEFCON 2 — ${trigger.reason.slice(0, 50)}`,
-    `DEFCON 2 — APPROVAL RECOMMENDED\n\nTRIGGER: ${trigger.reason}\n\nORACLE RECOMMENDATION:\n${response}\n\nReply to approve or override.\n\n${etNow().toLocaleString()} ET\nOracle is watching.`
+    `DEFCON 2 — APPROVAL RECOMMENDED\n\nTRIGGER: ${trigger.reason}\n\nORACLE RECOMMENDATION:\n${response}\n\nNote: v1.2 preserves existing behavior by writing advisory context immediately. Full approval-token gating remains a future Oracle v2 implementation item.\n\n${etNow().toLocaleString()} ET\nOracle is watching.`
   );
 }
 
@@ -626,10 +667,10 @@ function pctChange(account) {
   return (((eq - last) / last) * 100).toFixed(2);
 }
 
-// ── MAIN LOOP ─────────────────────────────────────────────────
+// ── ORACLE STRATEGIC CYCLE ────────────────────────────────────
 async function mainLoop() {
   try {
-    log("━━━ Sentinel cycle ━━━");
+    log("━━━ Oracle strategic cycle ━━━");
 
     const [vix, yield10, account, positions, directive, journal] = await Promise.all([
       fetchVIX(),
@@ -645,10 +686,10 @@ async function mainLoop() {
     // v1.1 FIX: directive?.mode → directive?.directive (source of the visible Dir:? bug)
     log(`State — VIX:${vix?.current ?? "?"} 10y:${yield10?.current ?? "?"} Eq:$${account?.equity ?? "?"} Dir:${directive?.directive ?? "?"}`);
 
-    // 1. Sentinel — DEFCON triggers
+    // 1. Asymmetric Sentinel — DEFCON triggers
     const triggers = await checkSentinel(state);
     if (triggers.length > 0) {
-      log(`Sentinel triggers: ${triggers.length}`);
+      log(`Asymmetric Sentinel triggers: ${triggers.length}`);
       // Fire highest severity first; stop after firing
       const byLevel = { DEFCON1: [], DEFCON2: [], DEFCON3: [] };
       for (const t of triggers) byLevel[t.level].push(t);
@@ -656,7 +697,7 @@ async function mainLoop() {
       else if (byLevel.DEFCON2.length) await fireDefcon2(byLevel.DEFCON2[0], state);
       else if (byLevel.DEFCON3.length) await fireDefcon3(byLevel.DEFCON3[0], state);
     } else {
-      log("Sentinel: all clear");
+      log("Asymmetric Sentinel: all clear");
     }
 
     // 2. Adaptive Architect
@@ -703,7 +744,7 @@ function startServer() {
       res.end(JSON.stringify({
         status: "ok",
         service: "oracle-intelligence",
-        version: "1.1",
+        version: ORACLE_VERSION,
         marketHours: isMarketHours(),
         oracleGistId: ORACLE_GIST_ID ? "set" : "not-set",
         cooldowns: Object.fromEntries(Object.entries(COOLDOWNS).map(([k, v]) => [k, v ? Math.max(0, COOLDOWN_MS - (Date.now() - v)) : 0])),
@@ -719,7 +760,7 @@ function startServer() {
 
 // ── BOOT ──────────────────────────────────────────────────────
 async function boot() {
-  log("◈◈◈ ORACLE INTELLIGENCE ENGINE v1.1 STARTING ◈◈◈");
+  log(`◈◈◈ ORACLE INTELLIGENCE ENGINE v${ORACLE_VERSION} STARTING ◈◈◈`);
   log(`Claude API: ${CONFIG.CLAUDE_API_KEY ? "✓ Configured" : "✗ Not configured"}`);
   log(`GitHub:     ${CONFIG.GITHUB_TOKEN ? "✓ Configured" : "✗ Not configured"}`);
   log(`Alpaca:     ${CONFIG.ALPACA_KEY_ID ? "✓ Configured" : "✗ Not configured"}`);
@@ -731,7 +772,7 @@ async function boot() {
 
   startServer();
 
-  // Initial sentinel check
+  // Initial Oracle strategic check
   await mainLoop();
 
   // Market-hours tick every 5 min
@@ -745,23 +786,30 @@ async function boot() {
   }, 30 * 60 * 1000);
 
   await sendEmail(
-    "◈ ORACLE INTELLIGENCE ENGINE v1.1 ONLINE",
-    `Oracle v1.1 has started.\n\n` +
-    `v1.1 PATCH: Fixed the Dir:? bug. Oracle now correctly reads\n` +
-    `Savant's active directive from the bridge payload. This re-enables\n` +
-    `the DEFCON 2 "stuck directive" trigger, the Adaptive Architect's\n` +
-    `VIX/directive consistency check, and makes all DEFCON prompts\n` +
-    `show Claude the actual current posture.\n\n` +
+    `◈ ORACLE INTELLIGENCE ENGINE v${ORACLE_VERSION} ONLINE`,
+    `Oracle v${ORACLE_VERSION} has started.\n\n` +
+    `v1.2 PATCH: Architecture alignment release. Oracle is now explicitly\n` +
+    `grounded as the strategic meta-intelligence layer above Savant,\n` +
+    `Marshall, and AlpacaBot. Sentinel remains one module inside Oracle,\n` +
+    `not Oracle's whole identity.\n\n` +
+    `IDENTITY ACTIVE:\n` +
+    `• Oracle is Oracle — no separate alias.\n` +
+    `• Five Tenets are embedded in every Claude call via system prompt.\n` +
+    `• Tenet 1 overrides all conflicts: drawdowns kill compounding; protect the compound.\n\n` +
     `CAPABILITIES ACTIVE:\n` +
     `• The Asymmetric Sentinel — DEFCON 1/2/3 trigger system\n` +
     `• The Adaptive Architect — regime change detection\n` +
-    `• The Scenario Engine — FOMC/earnings pre-gaming\n` +
-    `• The Socratic Loop — post-mortem quality scoring (Phase 4)\n` +
-    `• The Unified Portfolio Lens — combined exposure (Phase 5)\n\n` +
-    `DEFCON THRESHOLDS:\n` +
-    `DEFCON 1 (autonomous): VIX +20% spike OR portfolio -3% intraday\n` +
-    `DEFCON 2 (approval):   VIX crosses 25 OR portfolio -2% OR same directive 7+ days\n` +
-    `DEFCON 3 (flag only):  3+ loss streak OR win rate <30% OR FOMC within 3 days\n\n` +
+    `• The Scenario Engine — FOMC pre-gaming\n` +
+    `• The Socratic Loop — post-mortem quality scoring (Phase 4 stub)\n` +
+    `• The Unified Portfolio Lens — combined exposure (Phase 5 roadmap)\n\n` +
+    `DEFCON THRESHOLDS CURRENTLY IMPLEMENTED:\n` +
+    `DEFCON 1: VIX +20% spike OR portfolio -3% intraday\n` +
+    `DEFCON 2: VIX crosses 25 OR portfolio -2% OR same directive 7+ days\n` +
+    `DEFCON 3: 3+ loss streak OR win rate <30% OR FOMC within 3 days\n\n` +
+    `NOTE: Full DEFCON 2 approval-token gating is not implemented in v1.2;\n` +
+    `current behavior preserves advisory context write + email notification.\n\n` +
+    `No Bot logic, order logic, bridge schema, env vars, or trading execution\n` +
+    `behavior changed in this release.\n\n` +
     `CADENCE: 5min market hours · 30min after hours · 4hr cooldowns\n\n` +
     `${etNow().toLocaleString()} ET\n` +
     `Oracle is watching.`
