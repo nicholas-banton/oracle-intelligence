@@ -1,5 +1,5 @@
 // ============================================================
-// ORACLE — Strategic Intelligence Engine v1.2.1
+// ORACLE — Strategic Intelligence Engine v1.2.2
 // The invisible hand of the Apex Trading System
 // Powered by Claude API · Fourth Railway Service
 //
@@ -51,6 +51,15 @@
 //   Oracle refreshes the calm baseline without overwriting active alerts.
 //   This makes the Oracle → Savant bridge explicit and testable before
 //   the next trading session while preserving Savant v2.2 compatibility.
+//
+// v1.2.2 PATCH — 2026-05-08
+//   TIMESTAMP HYGIENE: All machine-readable timestamps now use true UTC
+//   via new Date().toISOString(). ET remains reserved for human-readable logs.
+//   Baseline context refresh now also triggers when the stored baseline was
+//   written by an older Oracle version, so this patch corrects existing
+//   baseline timestamp drift immediately without touching active alerts.
+//   No Bot logic, order logic, Savant directive logic, env vars, or bridge
+//   schema changed in this release.
 // ============================================================
 
 const https = require("https");
@@ -77,7 +86,7 @@ const ALPACA_HOST = CONFIG.ALPACA_PAPER
   ? "paper-api.alpaca.markets"
   : "api.alpaca.markets";
 
-const ORACLE_VERSION = "1.2.1";
+const ORACLE_VERSION = "1.2.2";
 
 const ORACLE_SYSTEM_PROMPT = `You are Oracle, the strategic intelligence meta-layer of the Apex Trading System.
 
@@ -116,6 +125,9 @@ function etNow() {
 }
 function tsET() {
   return etNow().toLocaleTimeString("en-US", { hour12: true });
+}
+function utcNowIso() {
+  return new Date().toISOString();
 }
 function log(msg)  { console.log(`[${tsET()} ET] [ORACLE] [INFO]  ${msg}`); }
 function warn(msg) { console.log(`[${tsET()} ET] [ORACLE] [WARN]  ${msg}`); }
@@ -243,7 +255,7 @@ async function readOracleContext() {
 async function writeOracleContext(ctx) {
   const payload = {
     schemaVersion: "1.0",
-    updatedAt: etNow().toISOString(),
+    updatedAt: utcNowIso(),
     ...ctx,
   };
   const content = JSON.stringify(payload, null, 2);
@@ -323,7 +335,10 @@ async function ensureBaselineOracleContext(state, contextWriteOccurred) {
   const existing = await readOracleContext();
   const staleHours = hoursSinceTimestamp(existing?.updatedAt);
   const needsBootstrap = !ORACLE_GIST_ID || !existing;
-  const needsRefresh = staleHours > 26;
+  const isBaselineContext = existing?.contextType === "baseline";
+  const needsVersionRefresh = isBaselineContext && existing?.oracleVersion !== ORACLE_VERSION;
+  const needsStaleRefresh = staleHours > 26;
+  const needsRefresh = needsStaleRefresh || needsVersionRefresh;
 
   if (!needsBootstrap && !needsRefresh) {
     log(`Oracle baseline: existing context fresh (${staleHours.toFixed(1)}h old) — no write needed`);
@@ -332,7 +347,9 @@ async function ensureBaselineOracleContext(state, contextWriteOccurred) {
 
   const reason = needsBootstrap
     ? "bootstrap_no_oracle_context"
-    : `refresh_stale_context_${staleHours.toFixed(1)}h`;
+    : needsVersionRefresh
+      ? `refresh_baseline_version_${existing?.oracleVersion || "unknown"}_to_${ORACLE_VERSION}`
+      : `refresh_stale_context_${staleHours.toFixed(1)}h`;
 
   const baseline = buildBaselineOracleContext(state, reason);
   const gistId = await writeOracleContext(baseline);
@@ -677,7 +694,7 @@ Be blunt. No caveats. Speak as Oracle. Tenet 1 governs.`;
     vix: state.vix,
     yield10: state.yield10,
     equity: state.account?.equity,
-    activeSince: etNow().toISOString(),
+    activeSince: utcNowIso(),
   });
 
   await sendEmail(
@@ -720,7 +737,7 @@ Speak as Oracle: seasoned advisor, direct, no hedging. Tenet 1 remains the overr
     vix: state.vix,
     yield10: state.yield10,
     equity: state.account?.equity,
-    activeSince: etNow().toISOString(),
+    activeSince: utcNowIso(),
   });
 
   await sendEmail(
@@ -741,7 +758,7 @@ async function fireDefcon3(trigger, state) {
     vix: state.vix,
     yield10: state.yield10,
     equity: state.account?.equity,
-    activeSince: etNow().toISOString(),
+    activeSince: utcNowIso(),
   });
 
   await sendEmail(
@@ -854,7 +871,7 @@ function startServer() {
         marketHours: isMarketHours(),
         oracleGistId: ORACLE_GIST_ID ? "set" : "not-set",
         cooldowns: Object.fromEntries(Object.entries(COOLDOWNS).map(([k, v]) => [k, v ? Math.max(0, COOLDOWN_MS - (Date.now() - v)) : 0])),
-        timestamp: etNow().toISOString(),
+        timestamp: utcNowIso(),
       }));
       return;
     }
