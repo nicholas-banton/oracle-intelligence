@@ -1,5 +1,5 @@
 // ============================================================
-// ORACLE — Strategic Intelligence Engine v1.3.0
+// ORACLE — Strategic Intelligence Engine v1.4.0
 // The invisible hand of the Apex Trading System
 // Powered by Claude API · Fourth Railway Service
 //
@@ -89,11 +89,12 @@
 
 const https = require("https");
 const http  = require("http");
+const { resolveModel, resolveOnFailure, currentModel } = require("./model_resolver");
 
 // ── CONFIG ────────────────────────────────────────────────────
 const CONFIG = {
   CLAUDE_API_KEY:    process.env.CLAUDE_API_KEY || process.env.ANTHROPIC_API_KEY,
-  CLAUDE_MODEL:      process.env.CLAUDE_MODEL   || "claude-sonnet-4-6",
+  // v1.4.0: CLAUDE_MODEL resolved dynamically by model_resolver.js — no hardcoded string
   GITHUB_TOKEN:      process.env.GITHUB_TOKEN,
   GITHUB_GIST_ID:    process.env.GITHUB_GIST_ID,
   GITHUB_JOURNAL_ID: process.env.GITHUB_JOURNAL_ID,
@@ -111,7 +112,7 @@ const ALPACA_HOST = CONFIG.ALPACA_PAPER
   ? "paper-api.alpaca.markets"
   : "api.alpaca.markets";
 
-const ORACLE_VERSION = "1.3.0";
+const ORACLE_VERSION = "1.4.0";
 
 const ORACLE_SYSTEM_PROMPT = `You are Oracle, the strategic intelligence meta-layer of the Apex Trading System.
 
@@ -445,9 +446,12 @@ async function readJournal() {
 }
 
 // ── CLAUDE API ────────────────────────────────────────────────
+// v1.4.0: uses model_resolver.js — no hardcoded model string.
+// On 404, triggers re-resolution and retries once.
 async function askClaude(prompt, maxTokens = 1024) {
+  const model = currentModel(); // live-resolved
   const body = {
-    model: CONFIG.CLAUDE_MODEL,
+    model,
     max_tokens: maxTokens,
     system: ORACLE_SYSTEM_PROMPT,
     messages: [{ role: "user", content: prompt }],
@@ -456,6 +460,20 @@ async function askClaude(prompt, maxTokens = 1024) {
     "x-api-key": CONFIG.CLAUDE_API_KEY,
     "anthropic-version": "2023-06-01",
   }, body, 60000);
+  // v1.4.0: self-heal on 404
+  if (res.status === 404) {
+    log(`Claude 404 — model '${model}' may be retired. Self-healing...`, "WARN");
+    await resolveOnFailure(CONFIG.CLAUDE_API_KEY, model, log);
+    const retryModel = currentModel();
+    const retryBody = { ...body, model: retryModel };
+    const retryRes = await apiPost("api.anthropic.com", "/v1/messages", {
+      "x-api-key": CONFIG.CLAUDE_API_KEY,
+      "anthropic-version": "2023-06-01",
+    }, retryBody, 60000);
+    if (retryRes.status !== 200) throw new Error(`Claude API retry ${retryRes.status}: ${retryRes.body.slice(0,200)}`);
+    const retryData = JSON.parse(retryRes.body);
+    return retryData.content?.[0]?.text || "";
+  }
   if (res.status !== 200) throw new Error(`Claude API ${res.status}: ${res.body.slice(0,200)}`);
   const data = JSON.parse(res.body);
   return data.content?.[0]?.text || "";
@@ -1032,6 +1050,9 @@ function startServer() {
 async function boot() {
   log(`◈◈◈ ORACLE INTELLIGENCE ENGINE v${ORACLE_VERSION} STARTING ◈◈◈`);
   log(`Claude API: ${CONFIG.CLAUDE_API_KEY ? "✓ Configured" : "✗ Not configured"}`);
+  // v1.4.0: self-healing model resolution at boot
+  const resolvedModel = await resolveModel(CONFIG.CLAUDE_API_KEY, log);
+  log(`Claude model: ${resolvedModel} (self-healing resolver active)`);
   log(`GitHub:     ${CONFIG.GITHUB_TOKEN ? "✓ Configured" : "✗ Not configured"}`);
   log(`Alpaca:     ${CONFIG.ALPACA_KEY_ID ? "✓ Configured" : "✗ Not configured"}`);
   log(`Email:      ${CONFIG.RESEND_KEY ? "✓ Configured" : "✗ Not configured"}`);
