@@ -93,7 +93,7 @@ const http  = require("http");
 // ── CONFIG ────────────────────────────────────────────────────
 const CONFIG = {
   CLAUDE_API_KEY:    process.env.CLAUDE_API_KEY || process.env.ANTHROPIC_API_KEY,
-  CLAUDE_MODEL:      process.env.CLAUDE_MODEL   || "claude-sonnet-4-20250514",
+  CLAUDE_MODEL:      process.env.CLAUDE_MODEL   || "claude-sonnet-4-6",
   GITHUB_TOKEN:      process.env.GITHUB_TOKEN,
   GITHUB_GIST_ID:    process.env.GITHUB_GIST_ID,
   GITHUB_JOURNAL_ID: process.env.GITHUB_JOURNAL_ID,
