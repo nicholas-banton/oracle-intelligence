@@ -112,7 +112,7 @@ const ALPACA_HOST = CONFIG.ALPACA_PAPER
   ? "paper-api.alpaca.markets"
   : "api.alpaca.markets";
 
-const ORACLE_VERSION = "1.4.0";
+const ORACLE_VERSION = "1.4.1";
 
 const ORACLE_SYSTEM_PROMPT = `You are Oracle, the strategic intelligence meta-layer of the Apex Trading System.
 
