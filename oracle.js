@@ -1,5 +1,5 @@
 // ============================================================
-// ORACLE — Strategic Intelligence Engine v1.4.0
+// ORACLE — Strategic Intelligence Engine v1.4.1
 // The invisible hand of the Apex Trading System
 // Powered by Claude API · Fourth Railway Service
 //
@@ -263,18 +263,23 @@ async function readOracleContext() {
 // wiped on every routine baseline write.
 async function writeOracleContext(ctx, existingCtx = null) {
   const preserved = existingCtx ? {
-    directiveHistory:  existingCtx.directiveHistory  || [],
-    scenarioPlan:      existingCtx.scenarioPlan       || null,
-    scenarioMatrix:    existingCtx.scenarioMatrix     || null,
-    scenarioEvent:     existingCtx.scenarioEvent      || null,
-    outcomeVerdict:    existingCtx.outcomeVerdict      || null,
+    directiveHistory:  existingCtx.directiveHistory || [],
+    scenarioPlan:      existingCtx.scenarioPlan || null,
+    scenarioMatrix:    existingCtx.scenarioMatrix || null,
+    scenarioEvent:     existingCtx.scenarioEvent || null,
+    outcomeVerdict:    existingCtx.outcomeVerdict || null,
+    scenarioHistory:   Array.isArray(existingCtx.scenarioHistory)
+      ? existingCtx.scenarioHistory
+      : [],
+    lastScenarioExpiredAt: existingCtx.lastScenarioExpiredAt || null,
+    lastScenarioExpiredReason: existingCtx.lastScenarioExpiredReason || null,
   } : {};
 
   const payload = {
-    schemaVersion: "1.0",
-    updatedAt: utcNowIso(),
     ...preserved,
     ...ctx,
+    schemaVersion: "1.0",
+    updatedAt: utcNowIso(),
   };
   const content = JSON.stringify(payload, null, 2);
 
@@ -298,6 +303,139 @@ function hoursSinceTimestamp(ts) {
   if (!Number.isFinite(t)) return Infinity;
   return (Date.now() - t) / (1000 * 60 * 60);
 }
+
+
+function getDateOnlyET(now = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(now);
+
+  const values = Object.fromEntries(
+    parts
+      .filter(({ type }) => type !== "literal")
+      .map(({ type, value }) => [type, value])
+  );
+
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
+function getNewYorkAnnouncementTime(dateStr, hour = 14, minute = 0) {
+  const [year, month, day] = String(dateStr).slice(0, 10).split("-").map(Number);
+
+  if (![year, month, day].every(Number.isFinite)) {
+    return new Date(NaN);
+  }
+
+  const utcGuess = Date.UTC(year, month - 1, day, hour, minute);
+
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(new Date(utcGuess));
+
+  const values = Object.fromEntries(
+    parts
+      .filter(({ type }) => type !== "literal")
+      .map(({ type, value }) => [type, value])
+  );
+
+  const localAsUtc = Date.UTC(
+    Number(values.year),
+    Number(values.month) - 1,
+    Number(values.day),
+    Number(values.hour),
+    Number(values.minute)
+  );
+
+  return new Date(utcGuess - (localAsUtc - utcGuess));
+}
+
+function getScenarioAttributionStatus(scenarioDate, outcomeVerdict) {
+  if (outcomeVerdict) return "resolved";
+
+  const eventTime = getNewYorkAnnouncementTime(scenarioDate);
+  if (!Number.isFinite(eventTime.getTime())) return "unknown";
+
+  const hoursSinceEvent = (Date.now() - eventTime.getTime()) / (60 * 60 * 1000);
+
+  if (hoursSinceEvent > 72) return "window_missed";
+  if (hoursSinceEvent < 20) return "waiting_window";
+
+  return "eligible";
+}
+
+function getScenarioDate(ctx) {
+  const matrixDate = ctx?.scenarioMatrix?.fomcDate;
+  if (matrixDate) return String(matrixDate).slice(0, 10);
+
+  const match = String(ctx?.scenarioEvent || "").match(/\d{4}-\d{2}-\d{2}/);
+  return match ? match[0] : null;
+}
+
+function scenarioHistoryEventDate(item) {
+  const matrixDate = item?.scenarioMatrix?.fomcDate;
+  if (matrixDate) return String(matrixDate).slice(0, 10);
+  return item?.eventDate || null;
+}
+
+function normalizeOracleContext(existingCtx) {
+  if (!existingCtx || typeof existingCtx !== "object") {
+    return { ctx: existingCtx, changed: false, reason: null };
+  }
+
+  const scenarioDate = getScenarioDate(existingCtx);
+
+  // A scenario remains active through its event day. Beginning the next
+  // ET calendar day, it moves to history and is no longer shown to Savant.
+  if (!scenarioDate || scenarioDate >= getDateOnlyET()) {
+    return { ctx: existingCtx, changed: false, reason: null };
+  }
+
+  const scenarioHistory = Array.isArray(existingCtx.scenarioHistory)
+    ? existingCtx.scenarioHistory.slice()
+    : [];
+
+  const alreadyArchived = scenarioHistory.some(item =>
+    scenarioHistoryEventDate(item) === scenarioDate
+  );
+
+  if (!alreadyArchived) {
+    scenarioHistory.push({
+      eventDate: scenarioDate,
+      archivedAt: utcNowIso(),
+      archiveReason: "scenario_event_date_passed",
+      attributionStatus: getScenarioAttributionStatus(scenarioDate, existingCtx.outcomeVerdict),
+      scenarioEvent: existingCtx.scenarioEvent || null,
+      scenarioPlan: existingCtx.scenarioPlan || null,
+      scenarioMatrix: existingCtx.scenarioMatrix || null,
+      outcomeVerdict: existingCtx.outcomeVerdict || null,
+    });
+  }
+
+  return {
+    ctx: {
+      ...existingCtx,
+      scenarioPlan: null,
+      scenarioMatrix: null,
+      scenarioEvent: null,
+      outcomeVerdict: null,
+      scenarioHistory: scenarioHistory.slice(-12),
+      lastScenarioExpiredAt: utcNowIso(),
+      lastScenarioExpiredReason: `Expired active scenario dated ${scenarioDate}`,
+    },
+    changed: true,
+    reason: `Archived expired scenario dated ${scenarioDate}`,
+  };
+}
+
 
 // v1.3.0 Fix B: directiveHistory is now included in baseline context payload.
 // This persists the rolling 14-day directive log so countConsecutiveSameDirective
@@ -773,28 +911,63 @@ async function runSocraticLoop(state) {
 // Runs automatically 20-72h after each FOMC meeting.
 // Reads stored scenarioMatrix, asks Claude which branch occurred,
 // writes outcomeVerdict, emails a CORRECT/WRONG scorecard.
+function findScenarioForAttribution(existingCtx, fomcDateStr) {
+  if (
+    existingCtx?.scenarioMatrix?.fomcDate === fomcDateStr &&
+    !existingCtx?.outcomeVerdict
+  ) {
+    return {
+      source: "active",
+      matrix: existingCtx.scenarioMatrix,
+      historyIndex: -1,
+    };
+  }
+
+  const history = Array.isArray(existingCtx?.scenarioHistory)
+    ? existingCtx.scenarioHistory
+    : [];
+
+  const historyIndex = history.findIndex(item =>
+    scenarioHistoryEventDate(item) === fomcDateStr &&
+    item?.scenarioMatrix &&
+    !item?.outcomeVerdict
+  );
+
+  if (historyIndex >= 0) {
+    return {
+      source: "history",
+      matrix: history[historyIndex].scenarioMatrix,
+      historyIndex,
+    };
+  }
+
+  return null;
+}
+
 async function runOutcomeAttribution(state, existingCtx) {
-  if (!existingCtx?.scenarioMatrix) return null;
-  // Skip if already attributed
-  if (existingCtx?.outcomeVerdict) return null;
+  if (!existingCtx || typeof existingCtx !== "object") return null;
 
-  const now = etNow();
+  const now = new Date();
+
   for (const fomcDateStr of FOMC_2026) {
-    const fomcTime = new Date(fomcDateStr + "T14:00:00-04:00");
+    const fomcTime = getNewYorkAnnouncementTime(fomcDateStr);
     const hoursSince = (now - fomcTime) / (60 * 60 * 1000);
-    if (hoursSince < 20 || hoursSince > 72) continue;
-    // Only attribute if the stored matrix was for this FOMC date
-    if (existingCtx.scenarioMatrix.fomcDate !== fomcDateStr) continue;
 
+    if (hoursSince < 20 || hoursSince > 72) continue;
+
+    const candidate = findScenarioForAttribution(existingCtx, fomcDateStr);
+    if (!candidate) continue;
+
+    const matrix = candidate.matrix;
     log(`🎯 Outcome attribution window: FOMC ${fomcDateStr} (${hoursSince.toFixed(0)}h ago)`);
 
-    const branches = existingCtx.scenarioMatrix.branches || [];
+    const branches = matrix.branches || [];
     const branchSummary = branches.map(b => `${b.name}: ${b.probability}%`).join(", ");
 
     const prompt = `Oracle, you predicted a scenario matrix for the FOMC meeting on ${fomcDateStr}.
 
 Your prediction was: ${branchSummary}
-Dominant branch: ${existingCtx.scenarioMatrix.dominantBranch} (${existingCtx.scenarioMatrix.dominantProbability}%)
+Dominant branch: ${matrix.dominantBranch} (${matrix.dominantProbability}%)
 
 Current market state (${hoursSince.toFixed(0)}h after the FOMC announcement):
 - VIX: ${state.vix?.current} (change: ${state.vix?.changePct}%)
@@ -815,13 +988,15 @@ Based on the market reaction, which of your three branches most closely describe
 }`;
 
     let verdict = null;
+
     try {
       const text = await askClaude(prompt, 700);
       const jsonMatch = text.match(/\{[\s\S]*\}/);
+
       if (jsonMatch) {
         verdict = JSON.parse(jsonMatch[0]);
-        verdict.predictedDominantBranch = existingCtx.scenarioMatrix.dominantBranch;
-        verdict.predictedDominantProbability = existingCtx.scenarioMatrix.dominantProbability;
+        verdict.predictedDominantBranch = matrix.dominantBranch;
+        verdict.predictedDominantProbability = matrix.dominantProbability;
         verdict.attributedAt = utcNowIso();
         verdict.fomcDate = fomcDateStr;
         verdict.hoursAfterEvent = +hoursSince.toFixed(1);
@@ -835,11 +1010,29 @@ Based on the market reaction, which of your three branches most closely describe
 
     log(`🎯 Attribution: predicted ${verdict.predictedDominantBranch}, actual ${verdict.actualBranch}, correct: ${verdict.correct}`);
 
-    // Write verdict into Oracle context
-    await writeOracleContext({ ...existingCtx, outcomeVerdict: verdict }, null);
+    if (candidate.source === "history") {
+      const updatedHistory = existingCtx.scenarioHistory.slice();
+      updatedHistory[candidate.historyIndex] = {
+        ...updatedHistory[candidate.historyIndex],
+        outcomeVerdict: verdict,
+        attributionStatus: "resolved",
+        attributedAt: verdict.attributedAt,
+      };
+
+      await writeOracleContext({
+        ...existingCtx,
+        scenarioHistory: updatedHistory,
+      }, null);
+    } else {
+      await writeOracleContext({
+        ...existingCtx,
+        outcomeVerdict: verdict,
+      }, null);
+    }
 
     const resultLabel = verdict.correct ? "✓ CORRECT" : "✗ WRONG";
     const accuracyStr = verdict.predictionAccuracy?.toUpperCase() || (verdict.correct ? "CORRECT" : "WRONG");
+
     await sendEmail(
       `🎯 ORACLE OUTCOME VERDICT — FOMC ${fomcDateStr}: ${resultLabel}`,
       `OUTCOME ATTRIBUTION — FOMC ${fomcDateStr}\n\n` +
@@ -855,8 +1048,10 @@ Based on the market reaction, which of your three branches most closely describe
 
     return verdict;
   }
+
   return null;
 }
+
 
 // ── FOMC CALENDAR ─────────────────────────────────────────────
 const FOMC_2026 = [
@@ -865,9 +1060,9 @@ const FOMC_2026 = [
 ];
 
 function daysUntilNextFOMC() {
-  const now = etNow();
+  const now = new Date();
   for (const d of FOMC_2026) {
-    const t = new Date(d + "T14:00:00-04:00");
+    const t = getNewYorkAnnouncementTime(d);
     if (t >= now) return Math.floor((t - now) / (24 * 60 * 60 * 1000));
   }
   return null;
@@ -950,7 +1145,14 @@ async function mainLoop() {
     ]);
 
     // Read existing context once — passed to all writes for field preservation
-    const existingCtx = await readOracleContext();
+    let existingCtx = await readOracleContext();
+
+    const normalizedContext = normalizeOracleContext(existingCtx);
+    if (normalizedContext.changed) {
+      log(`🧹 Scenario lifecycle: ${normalizedContext.reason}`);
+      await writeOracleContext(normalizedContext.ctx, null);
+      existingCtx = normalizedContext.ctx;
+    }
 
     // v1.3.0 Fix B: update directive history in memory before passing to state
     const directiveHistory = updateDirectiveHistory(existingCtx?.directiveHistory || [], directive);
