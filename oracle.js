@@ -101,7 +101,10 @@ const CONFIG = {
   GITHUB_ORACLE_ID:  process.env.GITHUB_ORACLE_ID,
   ALPACA_KEY_ID:     process.env.ALPACA_KEY_ID,
   ALPACA_SECRET_KEY: process.env.ALPACA_SECRET_KEY,
-  ALPACA_PAPER:      process.env.ALPACA_PAPER !== "false",
+  // Oracle is advisory only.  Broker reads, when configured, are always from
+  // the paper environment and its output may never authorize added risk.
+  ALPACA_PAPER:      true,
+  OUTPUT_MODE:       "shadow_advisory",
   RESEND_KEY:        process.env.RESEND_KEY,
   EMAIL_FROM:        process.env.EMAIL_FROM || "onboarding@resend.dev",
   EMAIL_TO:          process.env.EMAIL_TO   || "nicholas@coraemjen.com",
@@ -280,6 +283,8 @@ async function writeOracleContext(ctx, existingCtx = null) {
     ...ctx,
     schemaVersion: "1.0",
     updatedAt: utcNowIso(),
+    v6_advisory_only: true,
+    v6_risk_increase_authorized: false,
   };
   const content = JSON.stringify(payload, null, 2);
 
