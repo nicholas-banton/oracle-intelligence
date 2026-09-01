@@ -94,6 +94,9 @@ const { resolveModel, resolveOnFailure, currentModel } = require("./model_resolv
 // ── CONFIG ────────────────────────────────────────────────────
 const CONFIG = {
   CLAUDE_API_KEY:    process.env.CLAUDE_API_KEY || process.env.ANTHROPIC_API_KEY,
+  // v6 resilience: Oracle remains a deterministic reduce-risk observer until
+  // an AI provider is deliberately reintroduced as a report-only feature.
+  AI_NARRATIVE_MODE: "disabled",
   // v1.4.0: CLAUDE_MODEL resolved dynamically by model_resolver.js — no hardcoded string
   GITHUB_TOKEN:      process.env.GITHUB_TOKEN,
   GITHUB_GIST_ID:    process.env.GITHUB_GIST_ID,
@@ -592,6 +595,7 @@ async function readJournal() {
 // v1.4.0: uses model_resolver.js — no hardcoded model string.
 // On 404, triggers re-resolution and retries once.
 async function askClaude(prompt, maxTokens = 1024) {
+  if (CONFIG.AI_NARRATIVE_MODE !== "enabled") throw new Error("AI narrative mode is disabled");
   const model = currentModel(); // live-resolved
   const body = {
     model,
@@ -1256,10 +1260,12 @@ function startServer() {
 // ── BOOT ──────────────────────────────────────────────────────
 async function boot() {
   log(`◈◈◈ ORACLE INTELLIGENCE ENGINE v${ORACLE_VERSION} STARTING ◈◈◈`);
-  log(`Claude API: ${CONFIG.CLAUDE_API_KEY ? "✓ Configured" : "✗ Not configured"}`);
+  log(`AI narrative: ${CONFIG.AI_NARRATIVE_MODE === "enabled" ? "enabled" : "disabled — advisory rules only"}`);
   // v1.4.0: self-healing model resolution at boot
-  const resolvedModel = await resolveModel(CONFIG.CLAUDE_API_KEY, log);
-  log(`Claude model: ${resolvedModel} (self-healing resolver active)`);
+  const resolvedModel = CONFIG.AI_NARRATIVE_MODE === "enabled"
+    ? await resolveModel(CONFIG.CLAUDE_API_KEY, log)
+    : "not used";
+  log(`Claude model: ${resolvedModel}`);
   log(`GitHub:     ${CONFIG.GITHUB_TOKEN ? "✓ Configured" : "✗ Not configured"}`);
   log(`Alpaca:     ${CONFIG.ALPACA_KEY_ID ? "✓ Configured" : "✗ Not configured"}`);
   log(`Email:      ${CONFIG.RESEND_KEY ? "✓ Configured" : "✗ Not configured"}`);
