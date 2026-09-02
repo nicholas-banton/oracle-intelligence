@@ -1106,8 +1106,10 @@ Produce a DEFCON 1 crisis directive in <=150 words:
 3. One sentence: what you are protecting against
 
 Be blunt. No caveats. Tenet 1 governs.`;
-  let response = "(Claude unavailable)";
-  try { response = await askClaude(prompt, 600); } catch (e) { warn(`DEFCON 1 Claude call failed: ${e.message}`); }
+  let response = `Deterministic preservation alert: ${trigger.reason}. No orders are authorized; retain or move to the most protective shadow posture until reviewed.`;
+  if (CONFIG.AI_NARRATIVE_MODE === "enabled") {
+    try { response = await askClaude(prompt, 600); } catch (e) { warn(`DEFCON 1 AI narrative failed: ${e.message}`); }
+  }
   await writeOracleContext({ defconLevel:1, defconTrigger:trigger.reason, defconDirective:response, vix:state.vix, yield10:state.yield10, equity:state.account?.equity, activeSince:utcNowIso() }, existingCtx);
   await sendEmail(`🚨 ORACLE DEFCON 1 — ${trigger.reason.slice(0,50)}`,
     `DEFCON 1 — AUTONOMOUS INTERVENTION\n\nTRIGGER: ${trigger.reason}\n\nORACLE DIRECTIVE:\n${response}\n\n${etNow().toLocaleString()} ET\nOracle is watching.`);
@@ -1130,8 +1132,10 @@ Produce a DEFCON 2 recommendation in <=200 words:
 3. The reasoning in one paragraph
 
 Speak as Oracle: direct, no hedging. Tenet 1 overrides.`;
-  let response = "(Claude unavailable)";
-  try { response = await askClaude(prompt, 700); } catch (e) { warn(`DEFCON 2 Claude call failed: ${e.message}`); }
+  let response = `Deterministic reduce-risk advisory: ${trigger.reason}. Keep the shadow policy at or below REDUCED_RISK pending review.`;
+  if (CONFIG.AI_NARRATIVE_MODE === "enabled") {
+    try { response = await askClaude(prompt, 700); } catch (e) { warn(`DEFCON 2 AI narrative failed: ${e.message}`); }
+  }
   await writeOracleContext({ defconLevel:2, defconTrigger:trigger.reason, defconDirective:response, vix:state.vix, yield10:state.yield10, equity:state.account?.equity, activeSince:utcNowIso() }, existingCtx);
   await sendEmail(`⚠ ORACLE DEFCON 2 — ${trigger.reason.slice(0,50)}`,
     `DEFCON 2 — APPROVAL RECOMMENDED\n\nTRIGGER: ${trigger.reason}\n\nORACLE RECOMMENDATION:\n${response}\n\n${etNow().toLocaleString()} ET\nOracle is watching.`);
@@ -1304,7 +1308,7 @@ async function boot() {
     `◈ ORACLE v${ORACLE_VERSION} ONLINE`,
     `Oracle Intelligence Engine v${ORACLE_VERSION} has started.\n\n` +
     `── SYSTEM STATUS ──────────────────────\n` +
-    `Claude API:  ${CONFIG.CLAUDE_API_KEY ? "✓ Configured" : "✗ Not configured"}\n` +
+    `AI narrative: ${CONFIG.AI_NARRATIVE_MODE === "enabled" ? "enabled" : "disabled — deterministic advisory mode"}\n` +
     `Bridge:      ${CONFIG.GITHUB_GIST_ID ? "✓ Connected" : "⚠ Not set — DEFCON triggers will not read directive"}\n` +
     `Journal:     ${CONFIG.GITHUB_JOURNAL_ID ? "✓ Connected" : "⚠ Not set — win-rate DEFCON trigger inactive"}\n` +
     `Oracle Gist: ${ORACLE_GIST_ID ? "✓ Connected" : "⚠ Will bootstrap on first cycle"}\n` +
