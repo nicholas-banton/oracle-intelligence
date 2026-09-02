@@ -150,8 +150,11 @@ const COOLDOWNS = { DEFCON1: 0, DEFCON2: 0, DEFCON3: 0, SCENARIO: 0, ARCHITECT: 
 const COOLDOWN_MS = 4 * 60 * 60 * 1000;
 let ORACLE_GIST_ID = CONFIG.GITHUB_ORACLE_ID || null;
 
-// v1.3.0 Fix A: track last successful context write for heartbeat monitoring
+// Track both writes and completed cycles. A normal baseline may intentionally
+// go many hours without a write, so health must follow completed cycles rather
+// than treating a quiet context as a failed service.
 let lastContextWriteTime = Date.now();
+let lastSuccessfulCycleTime = Date.now();
 let heartbeatAlertSent = false;
 
 // ── LOG ───────────────────────────────────────────────────────
@@ -642,20 +645,20 @@ async function sendEmail(subject, body) {
 function onCooldown(level) { return Date.now() - (COOLDOWNS[level] || 0) < COOLDOWN_MS; }
 function setCooldown(level) { COOLDOWNS[level] = Date.now(); }
 
-// ── v1.3.0 Fix A: SERVICE HEARTBEAT ──────────────────────────
-// Runs every 30 minutes. If market hours and no context write in >2h,
-// sends a single alert email. Resets after the next successful write.
+// ── SERVICE HEARTBEAT ─────────────────────────────────────────
+// A quiet context is normal outside event windows. Alert only if strategic
+// cycles themselves stop completing during market hours.
 async function checkHeartbeat() {
   if (!isMarketHours()) return;
-  const elapsedMs = Date.now() - lastContextWriteTime;
-  const twoHoursMs = 2 * 60 * 60 * 1000;
-  if (elapsedMs > twoHoursMs && !heartbeatAlertSent) {
-    const hoursElapsed = (elapsedMs / (60 * 60 * 1000)).toFixed(1);
-    warn(`Heartbeat: No context write in ${hoursElapsed}h during market hours`);
+  const elapsedMs = Date.now() - lastSuccessfulCycleTime;
+  const maxCycleGapMs = 20 * 60 * 1000;
+  if (elapsedMs > maxCycleGapMs && !heartbeatAlertSent) {
+    const minutesElapsed = Math.round(elapsedMs / 60000);
+    warn(`Heartbeat: No completed strategic cycle in ${minutesElapsed}m during market hours`);
     heartbeatAlertSent = true;
     await sendEmail(
-      `⚠ ORACLE HEARTBEAT: No context write in ${hoursElapsed}h`,
-      `Oracle has not written to the context Gist in ${hoursElapsed} hours during market hours.\n\nThis may indicate a Gist write failure, Claude API error, or service degradation.\n\nLast successful write: ${new Date(lastContextWriteTime).toLocaleString("en-US", {timeZone:"America/New_York"})} ET\n\nManual check recommended. Oracle may be running but not producing outputs.\n\n${etNow().toLocaleString()} ET\nOracle is watching — but something may be wrong.`
+      `⚠ ORACLE HEARTBEAT: No completed cycle in ${minutesElapsed}m`,
+      `Oracle has not completed a strategic cycle for ${minutesElapsed} minutes during market hours.\n\nThis may indicate service or upstream-data degradation. A quiet context Gist alone is not an error.\n\nLast completed cycle: ${new Date(lastSuccessfulCycleTime).toLocaleString("en-US", {timeZone:"America/New_York"})} ET\nLast context write: ${new Date(lastContextWriteTime).toLocaleString("en-US", {timeZone:"America/New_York"})} ET\n\nManual check recommended.\n\n${etNow().toLocaleString()} ET\nOracle is watching — but something may be wrong.`
     );
   }
 }
@@ -1225,8 +1228,9 @@ async function mainLoop() {
     // 6. Socratic Loop (Phase 4 — deferred)
     await runSocraticLoop(state);
 
-    // v1.3.0 Fix A: check heartbeat (only alerts if write cycle just failed)
-    // Note: called at END of loop so we don't alert on in-progress writes
+    lastSuccessfulCycleTime = Date.now();
+    heartbeatAlertSent = false;
+    // Check after marking a successful cycle; quiet context alone is healthy.
     await checkHeartbeat();
 
   } catch (e) {
@@ -1246,6 +1250,7 @@ function startServer() {
         marketHours: isMarketHours(),
         oracleGistId: ORACLE_GIST_ID ? "set" : "not-set",
         lastContextWriteMinutesAgo: +((Date.now() - lastContextWriteTime) / 60000).toFixed(1),
+        lastSuccessfulCycleMinutesAgo: +((Date.now() - lastSuccessfulCycleTime) / 60000).toFixed(1),
         cooldowns: Object.fromEntries(Object.entries(COOLDOWNS).map(([k,v]) => [k, v ? Math.max(0, COOLDOWN_MS-(Date.now()-v)) : 0])),
         timestamp: utcNowIso(),
       }));
