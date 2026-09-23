@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://apex.local/schema/oracle-v2-ledger.schema.json",
+  "title": "Oracle v2 Shadow Evidence Ledger",
+  "type": "object",
+  "required": ["schemaVersion", "mode", "authority", "records"],
+  "properties": {
+    "schemaVersion": { "const": "2.0" },
+    "mode": { "const": "shadow_advisory" },
+    "authority": {
+      "type": "object",
+      "required": ["canTrade", "canSetTargetWeights", "canOverrideSavant", "canIncreaseRisk"],
+      "properties": {
+        "canTrade": { "const": false },
+        "canSetTargetWeights": { "const": false },
+        "canOverrideSavant": { "const": false },
+        "canIncreaseRisk": { "const": false }
+      },
+      "additionalProperties": false
+    },
+    "updatedAt": { "type": "string" },
+    "oracleVersion": { "type": "string" },
+    "mandate": { "type": "object" },
+    "records": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "asOf", "mode", "authority"],
+        "properties": {
+          "id": { "type": "string" },
+          "asOf": { "type": "string" },
+          "mode": { "const": "shadow_advisory" },
+          "authority": { "$ref": "#/$defs/authority" },
+          "independentRead": { "type": "object" },
+          "savant": { "type": "object" },
+          "audit": { "type": "object" },
+          "session": { "type": "object" },
+          "score": { "type": "object" }
+        },
+        "additionalProperties": true
+      }
+    }
+  },
+  "$defs": {
+    "authority": {
+      "type": "object",
+      "properties": {
+        "canTrade": { "const": false },
+        "canSetTargetWeights": { "const": false },
+        "canOverrideSavant": { "const": false },
+        "canIncreaseRisk": { "const": false }
+      },
+      "required": ["canTrade", "canSetTargetWeights", "canOverrideSavant", "canIncreaseRisk"]
+    }
+  },
+  "additionalProperties": true
+}

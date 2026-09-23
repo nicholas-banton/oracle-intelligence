@@ -1,10 +1,12 @@
 {
   "name": "oracle-intelligence",
   "version": "1.0.0",
-  "description": "Oracle — Strategic Intelligence Engine for the Apex Trading System",
+  "description": "Oracle \u2014 Strategic Intelligence Engine for the Apex Trading System",
   "main": "oracle.js",
   "scripts": {
-    "start": "node oracle.js"
+    "start": "node oracle.js",
+    "start:v2": "node oracle_v2.js",
+    "test:v2": "node tests/oracle_v2_run.js"
   },
   "engines": {
     "node": ">=18"

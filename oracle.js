@@ -90,6 +90,7 @@
 const https = require("https");
 const http  = require("http");
 const { resolveModel, resolveOnFailure, currentModel } = require("./model_resolver");
+const { renderOracleEmail } = require("./email_renderer");
 
 // ── CONFIG ────────────────────────────────────────────────────
 const CONFIG = {
@@ -633,9 +634,13 @@ async function askClaude(prompt, maxTokens = 1024) {
 async function sendEmail(subject, body) {
   if (!CONFIG.RESEND_KEY) { warn("RESEND_KEY not set — skipping email"); return; }
   try {
+    // Presentation-only enhancement: existing Oracle policy, trigger and body text
+    // remain unchanged. Resend receives a human-friendly HTML view plus the
+    // original text fallback.
+    const html = renderOracleEmail({ subject, body, footer: "Oracle is watching." });
     const res = await apiPost("api.resend.com", "/emails", {
       "Authorization": `Bearer ${CONFIG.RESEND_KEY}`,
-    }, { from: CONFIG.EMAIL_FROM, to: CONFIG.EMAIL_TO, subject, text: body }, 15000);
+    }, { from: CONFIG.EMAIL_FROM, to: CONFIG.EMAIL_TO, subject, text: body, html }, 15000);
     if (res.status >= 200 && res.status < 300) log(`📧 Email sent: ${subject}`);
     else warn(`Email failed: ${res.status} ${res.body.slice(0,150)}`);
   } catch (e) { warn(`Email error: ${e.message}`); }
