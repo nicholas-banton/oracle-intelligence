@@ -2,6 +2,11 @@
 
 function finite(v) { return Number.isFinite(Number(v)); }
 function n(v, fallback = null) { return finite(v) ? Number(v) : fallback; }
+// A derived spread exists only when BOTH legs are actually-measured finite observations.
+// `finite(null)` is true because `Number(null) === 0`, so a single missing leg previously
+// participated in the arithmetic and turned absent data into a real spread
+// (e.g. rsp5 = null, spy5 = 0.50 produced -0.50 instead of null). A genuine 0 leg is valid.
+function spread(a, b) { return a != null && b != null && finite(a) && finite(b) ? a - b : null; }
 function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 
 function pct(a, b) {
@@ -86,10 +91,10 @@ function buildMarketMetrics(m = {}) {
   return {
     qqq5, qqq20, spy5, spy20, rsp5, iwm5, hyg5, tlt5, gld5, slv5,
     vix: n(vix), vix5, tenYear: n(tnx), tenYear20Pct: tnx20,
-    qqqVsSpy5: finite(qqq5) && finite(spy5) ? qqq5 - spy5 : null,
-    equalWeightVsSpy5: finite(rsp5) && finite(spy5) ? rsp5 - spy5 : null,
-    smallCapsVsSpy5: finite(iwm5) && finite(spy5) ? iwm5 - spy5 : null,
-    creditVsDuration5: finite(hyg5) && finite(tlt5) ? hyg5 - tlt5 : null,
+    qqqVsSpy5: spread(qqq5, spy5),
+    equalWeightVsSpy5: spread(rsp5, spy5),
+    smallCapsVsSpy5: spread(iwm5, spy5),
+    creditVsDuration5: spread(hyg5, tlt5),
     qqqVol20: rollingVol(m.QQQ, 20),
     spyVol20: rollingVol(m.SPY, 20),
     qqqTltCorr20: correlation(m.QQQ, m.TLT, 20),
@@ -109,13 +114,20 @@ function independentMarketRead(metrics = {}) {
     else { score -= Math.abs(points) * 0.65; if (negativeText) counterEvidence.push(negativeText); }
   };
 
-  if (finite(metrics.qqq20)) add(metrics.qqq20 > 0, 1.25, `QQQ 20-session trend is positive (${metrics.qqq20.toFixed(1)}%)`, `QQQ 20-session trend is negative (${metrics.qqq20.toFixed(1)}%)`);
-  if (finite(metrics.spy20)) add(metrics.spy20 > 0, 0.75, `SPY 20-session trend is positive (${metrics.spy20.toFixed(1)}%)`, `SPY 20-session trend is negative (${metrics.spy20.toFixed(1)}%)`);
-  if (finite(metrics.equalWeightVsSpy5)) add(metrics.equalWeightVsSpy5 > -0.25, 0.8, `Breadth proxy is holding (${metrics.equalWeightVsSpy5.toFixed(2)}pp RSP-SPY)`, `Breadth is narrowing (${metrics.equalWeightVsSpy5.toFixed(2)}pp RSP-SPY)`);
-  if (finite(metrics.smallCapsVsSpy5)) add(metrics.smallCapsVsSpy5 > -0.5, 0.6, `Small-cap participation is not materially lagging (${metrics.smallCapsVsSpy5.toFixed(2)}pp)`, `Small caps are lagging (${metrics.smallCapsVsSpy5.toFixed(2)}pp vs SPY)`);
-  if (finite(metrics.creditVsDuration5)) add(metrics.creditVsDuration5 > -1.0, 0.9, `Credit is not signaling acute stress (${metrics.creditVsDuration5.toFixed(2)}pp HYG-TLT)`, `Credit/duration relationship is defensive (${metrics.creditVsDuration5.toFixed(2)}pp HYG-TLT)`);
-  if (finite(metrics.vix)) add(metrics.vix < 22, 1.0, `VIX is below acute-stress territory (${metrics.vix.toFixed(1)})`, `VIX is elevated (${metrics.vix.toFixed(1)})`);
-  if (finite(metrics.qqqVol20)) add(metrics.qqqVol20 < 35, 0.45, `QQQ realized volatility is contained (${metrics.qqqVol20.toFixed(1)}% annualized)`, `QQQ realized volatility is elevated (${metrics.qqqVol20.toFixed(1)}% annualized)`);
+  // A metric is usable only when it is an actually-measured finite observation. `finite(null)`
+  // is true because `Number(null) === 0`, which previously let a null metric reach the text
+  // templates below and call `null.toFixed(...)`, crashing the pre-open phase. An unavailable
+  // metric makes NO contribution — the same neutral outcome `add()` already gives `cond == null`.
+  // A genuine numeric 0 stays a valid measurement. Weights and thresholds are unchanged.
+  const measured = v => v != null && finite(v);
+
+  if (measured(metrics.qqq20)) add(metrics.qqq20 > 0, 1.25, `QQQ 20-session trend is positive (${metrics.qqq20.toFixed(1)}%)`, `QQQ 20-session trend is negative (${metrics.qqq20.toFixed(1)}%)`);
+  if (measured(metrics.spy20)) add(metrics.spy20 > 0, 0.75, `SPY 20-session trend is positive (${metrics.spy20.toFixed(1)}%)`, `SPY 20-session trend is negative (${metrics.spy20.toFixed(1)}%)`);
+  if (measured(metrics.equalWeightVsSpy5)) add(metrics.equalWeightVsSpy5 > -0.25, 0.8, `Breadth proxy is holding (${metrics.equalWeightVsSpy5.toFixed(2)}pp RSP-SPY)`, `Breadth is narrowing (${metrics.equalWeightVsSpy5.toFixed(2)}pp RSP-SPY)`);
+  if (measured(metrics.smallCapsVsSpy5)) add(metrics.smallCapsVsSpy5 > -0.5, 0.6, `Small-cap participation is not materially lagging (${metrics.smallCapsVsSpy5.toFixed(2)}pp)`, `Small caps are lagging (${metrics.smallCapsVsSpy5.toFixed(2)}pp vs SPY)`);
+  if (measured(metrics.creditVsDuration5)) add(metrics.creditVsDuration5 > -1.0, 0.9, `Credit is not signaling acute stress (${metrics.creditVsDuration5.toFixed(2)}pp HYG-TLT)`, `Credit/duration relationship is defensive (${metrics.creditVsDuration5.toFixed(2)}pp HYG-TLT)`);
+  if (measured(metrics.vix)) add(metrics.vix < 22, 1.0, `VIX is below acute-stress territory (${metrics.vix.toFixed(1)})`, `VIX is elevated (${metrics.vix.toFixed(1)})`);
+  if (measured(metrics.qqqVol20)) add(metrics.qqqVol20 < 35, 0.45, `QQQ realized volatility is contained (${metrics.qqqVol20.toFixed(1)}% annualized)`, `QQQ realized volatility is elevated (${metrics.qqqVol20.toFixed(1)}% annualized)`);
 
   let structure;
   if (score >= 2.5) structure = "supportive";

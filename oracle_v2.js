@@ -290,15 +290,43 @@ async function runClose(date) {
   log(`Close evidence recorded: QQQ=${Number.isFinite(qqqReturnPct) ? qqqReturnPct.toFixed(2) + "%" : "n/a"}, equity=${Number.isFinite(equityReturnPct) ? equityReturnPct.toFixed(2) + "%" : "n/a"}`);
 }
 
+// Phase evidence, once persisted, is immutable. A restart bootstraps the day's record again,
+// and recordBase() would otherwise overwrite market / marketMetrics / independentRead with a
+// later boot-time snapshot while leaving preopen.completedAt intact — presenting post-open data
+// as though it were the original pre-open read. Freeze completed phase evidence; only fill gaps.
+const PHASE_EVIDENCE_KEYS = ["market", "marketMetrics", "independentRead"];
+function hasCompletedPhase(existing) {
+  return Boolean(existing?.preopen?.completedAt || existing?.auditCompletedAt || existing?.closeCompletedAt);
+}
+function buildBootstrapRecord(existing, base, nowIso = utcNowIso()) {
+  const frozen = hasCompletedPhase(existing);
+  const record = {
+    ...(existing || {}),
+    ...base,
+    bootstrap: {
+      completedAt: nowIso,
+      note: frozen
+        ? "Boot snapshot only; completed phase evidence preserved (not a pre-open judgment)."
+        : "Initial evidence snapshot; not a scheduled pre-open judgment.",
+    },
+  };
+  if (frozen) {
+    for (const key of PHASE_EVIDENCE_KEYS) {
+      if (existing[key] !== undefined) record[key] = existing[key];
+    }
+  }
+  return record;
+}
+
 async function bootstrapSnapshot() {
   const date = tradingDate();
   const [market, account, ledger] = await Promise.all([fetchMarket(), fetchAccount(), readLedger()]);
   const metrics = buildMarketMetrics(market);
   const read = independentMarketRead(metrics);
   const existing = ledger.find(x => x.id === date) || {};
-  const record = { ...existing, ...recordBase({ date, market, metrics, read, account }), bootstrap: { completedAt: utcNowIso(), note: "Initial evidence snapshot; not a scheduled pre-open judgment." } };
+  const record = buildBootstrapRecord(existing, recordBase({ date, market, metrics, read, account }));
   await writeLedger(upsertRecord(ledger, record), { mandate: mandateSummary(ledger) });
-  log(`Bootstrap evidence snapshot stored for ${date}`);
+  log(`Bootstrap evidence snapshot stored for ${date}${hasCompletedPhase(existing) ? " (completed phase evidence preserved)" : ""}`);
 }
 
 async function runPhase(phase, date = tradingDate()) {
@@ -356,4 +384,4 @@ if (require.main === module) {
   boot().catch(e => { console.error(e); process.exit(1); });
 }
 
-module.exports = { phaseForNow, humanAuditBody, runPhase };
+module.exports = { phaseForNow, humanAuditBody, runPhase, buildBootstrapRecord, hasCompletedPhase, PHASE_EVIDENCE_KEYS };
