@@ -55,6 +55,18 @@ function series(start, changes) {
   const scored=scoreMatureJudgments(rows,5);
   assert.equal(scored[0].score.status,"scored");
   assert.equal(scored[0].score.directionallySupported,true);
+
+  const immature=[
+    {
+      id:"d0",
+      asOf:"2026-01-01",
+      market:{QQQ:{close:100}},
+      audit:{challengeType:"possible_excessive_defensiveness"}
+    }
+  ];
+
+  const unscored=scoreMatureJudgments(immature,5);
+  assert.equal(unscored[0].score,undefined);
 })();
 
 (function mandateTests(){

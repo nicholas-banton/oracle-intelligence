@@ -202,7 +202,7 @@ function scoreMatureJudgments(history = [], horizon = 5) {
     if (row?.score?.status === "scored") continue;
     if (!row?.audit?.challengeType || row.audit.challengeType === "aligned" || row.audit.challengeType === "uncertain_regime") continue;
     const fwd = forwardOutcome(out, i, horizon);
-    if (!finite(fwd)) continue;
+    if (fwd == null || !finite(fwd)) continue;
 
     let supported = null;
     if (row.audit.challengeType === "possible_excessive_defensiveness") supported = fwd > 1.5;
