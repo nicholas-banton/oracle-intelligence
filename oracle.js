@@ -148,6 +148,10 @@ Style: concise, direct, unsentimental, high-signal. Prefer process over narrativ
 
 const COOLDOWNS = { DEFCON1: 0, DEFCON2: 0, DEFCON3: 0, SCENARIO: 0, ARCHITECT: 0 };
 const COOLDOWN_MS = 4 * 60 * 60 * 1000;
+// Standing conditions (e.g. "same directive N consecutive days") stay true for days or weeks.
+// They must not re-send the same email every cooldown window: notify once when the condition
+// appears, then at most one reminder per window while its identity is unchanged.
+const STANDING_REMINDER_MS = 72 * 60 * 60 * 1000;
 let ORACLE_GIST_ID = CONFIG.GITHUB_ORACLE_ID || null;
 
 // Track both writes and completed cycles. A normal baseline may intentionally
@@ -270,7 +274,10 @@ async function readOracleContext() {
 // Fields in existingCtx that are NOT explicitly set in ctx are carried forward,
 // preventing directiveHistory, scenarioMatrix, and outcomeVerdict from being
 // wiped on every routine baseline write.
-async function writeOracleContext(ctx, existingCtx = null) {
+// Pure payload builder, extracted so the preserve/override semantics are unit-testable.
+// Fields NOT explicitly set in ctx are carried forward from existingCtx; anything present in
+// ctx (e.g. an updated directiveHistory) OVERRIDES the carried-forward copy.
+function buildOracleContextPayload(ctx, existingCtx = null) {
   const preserved = existingCtx ? {
     directiveHistory:  existingCtx.directiveHistory || [],
     scenarioPlan:      existingCtx.scenarioPlan || null,
@@ -284,7 +291,7 @@ async function writeOracleContext(ctx, existingCtx = null) {
     lastScenarioExpiredReason: existingCtx.lastScenarioExpiredReason || null,
   } : {};
 
-  const payload = {
+  return {
     ...preserved,
     ...ctx,
     schemaVersion: "1.0",
@@ -292,6 +299,10 @@ async function writeOracleContext(ctx, existingCtx = null) {
     v6_advisory_only: true,
     v6_risk_increase_authorized: false,
   };
+}
+
+async function writeOracleContext(ctx, existingCtx = null) {
+  const payload = buildOracleContextPayload(ctx, existingCtx);
   const content = JSON.stringify(payload, null, 2);
 
   if (!ORACLE_GIST_ID) {
@@ -464,6 +475,7 @@ function buildBaselineOracleContext(state, reason, directiveHistory = []) {
     defconLevel: null,
     defconTrigger: null,
     defconDirective: null,
+    defconKey: null,
     directiveHistory,
     regime: {
       current: regimeName,
@@ -645,6 +657,18 @@ async function sendEmail(subject, body) {
 function onCooldown(level) { return Date.now() - (COOLDOWNS[level] || 0) < COOLDOWN_MS; }
 function setCooldown(level) { COOLDOWNS[level] = Date.now(); }
 
+// A trigger carrying a stable `key` describes a condition, not an event. The key must NOT
+// include a value that grows every day (e.g. the day count), so a persistent condition keeps
+// the same identity. Returns true when this condition was already emailed within the reminder
+// window — for those we refresh the context but stay quiet.
+function isRepeatStandingAlert(trigger, existingCtx) {
+  if (!trigger?.key) return false;
+  if (existingCtx?.defconKey !== trigger.key) return false;
+  const since = Date.parse(existingCtx?.activeSince || "");
+  if (!Number.isFinite(since)) return false;
+  return (Date.now() - since) < STANDING_REMINDER_MS;
+}
+
 // ── SERVICE HEARTBEAT ─────────────────────────────────────────
 // A quiet context is normal outside event windows. Alert only if strategic
 // cycles themselves stop completing during market hours.
@@ -707,7 +731,9 @@ async function checkSentinel(state) {
   // v1.3.0 Fix B: reads from directiveHistory (persisted) instead of journal.directives[] (non-existent)
   const stuckDays = countConsecutiveSameDirective(directiveHistory, directive);
   if (stuckDays >= 7) {
-    triggers.push({ level: "DEFCON2", reason: `Same directive (${directive?.directive || "?"}) for ${stuckDays} consecutive days` });
+    // Standing condition: identity is the directive itself, NOT the growing day count,
+    // so the same persistent condition keeps one identity across cycles.
+    triggers.push({ level: "DEFCON2", key: `same_directive:${directive?.directive || "?"}`, reason: `Same directive (${directive?.directive || "?"}) for ${stuckDays} consecutive days` });
   }
 
   const lossStreak = countLossStreak(journal);
@@ -1110,7 +1136,7 @@ Be blunt. No caveats. Tenet 1 governs.`;
   if (CONFIG.AI_NARRATIVE_MODE === "enabled") {
     try { response = await askClaude(prompt, 600); } catch (e) { warn(`DEFCON 1 AI narrative failed: ${e.message}`); }
   }
-  await writeOracleContext({ defconLevel:1, defconTrigger:trigger.reason, defconDirective:response, vix:state.vix, yield10:state.yield10, equity:state.account?.equity, activeSince:utcNowIso() }, existingCtx);
+  await writeOracleContext({ defconLevel:1, defconKey:trigger.key || null, defconTrigger:trigger.reason, defconDirective:response, directiveHistory:state.directiveHistory, vix:state.vix, yield10:state.yield10, equity:state.account?.equity, activeSince:utcNowIso() }, existingCtx);
   await sendEmail(`🚨 ORACLE DEFCON 1 — ${trigger.reason.slice(0,50)}`,
     `DEFCON 1 — AUTONOMOUS INTERVENTION\n\nTRIGGER: ${trigger.reason}\n\nORACLE DIRECTIVE:\n${response}\n\n${etNow().toLocaleString()} ET\nOracle is watching.`);
 }
@@ -1118,7 +1144,14 @@ Be blunt. No caveats. Tenet 1 governs.`;
 async function fireDefcon2(trigger, state, existingCtx) {
   if (onCooldown("DEFCON2")) { log(`DEFCON 2 on cooldown — skipping: ${trigger.reason}`); return; }
   setCooldown("DEFCON2");
-  log(`⚠ DEFCON 2 FIRED — ${trigger.reason}`);
+
+  // A standing condition stays true for days or weeks. Refresh the context (so Savant still
+  // reads current state) but do not re-send the same alert email — notify once when the
+  // condition appears, then one reminder per STANDING_REMINDER_MS, re-arming when it changes.
+  const repeat = isRepeatStandingAlert(trigger, existingCtx);
+  if (repeat) log(`⚠ DEFCON 2 condition unchanged (${trigger.key}) — context refreshed, duplicate email suppressed: ${trigger.reason}`);
+  else log(`⚠ DEFCON 2 FIRED — ${trigger.reason}`);
+
   const prompt = `DEFCON 2 has fired. Approval-recommended alert.
 
 TRIGGER: ${trigger.reason}
@@ -1132,20 +1165,26 @@ Produce a DEFCON 2 recommendation in <=200 words:
 3. The reasoning in one paragraph
 
 Speak as Oracle: direct, no hedging. Tenet 1 overrides.`;
-  let response = `Deterministic reduce-risk advisory: ${trigger.reason}. Keep the shadow policy at or below REDUCED_RISK pending review.`;
-  if (CONFIG.AI_NARRATIVE_MODE === "enabled") {
+  // For an unchanged standing condition, keep the existing narrative instead of regenerating it.
+  let response = repeat && existingCtx?.defconDirective
+    ? existingCtx.defconDirective
+    : `Deterministic reduce-risk advisory: ${trigger.reason}. Keep the shadow policy at or below REDUCED_RISK pending review.`;
+  if (!repeat && CONFIG.AI_NARRATIVE_MODE === "enabled") {
     try { response = await askClaude(prompt, 700); } catch (e) { warn(`DEFCON 2 AI narrative failed: ${e.message}`); }
   }
-  await writeOracleContext({ defconLevel:2, defconTrigger:trigger.reason, defconDirective:response, vix:state.vix, yield10:state.yield10, equity:state.account?.equity, activeSince:utcNowIso() }, existingCtx);
-  await sendEmail(`⚠ ORACLE DEFCON 2 — ${trigger.reason.slice(0,50)}`,
-    `DEFCON 2 — APPROVAL RECOMMENDED\n\nTRIGGER: ${trigger.reason}\n\nORACLE RECOMMENDATION:\n${response}\n\n${etNow().toLocaleString()} ET\nOracle is watching.`);
+  // activeSince marks the last NOTIFIED time, so a suppressed cycle must not reset the clock.
+  await writeOracleContext({ defconLevel:2, defconKey:trigger.key || null, defconTrigger:trigger.reason, defconDirective:response, directiveHistory:state.directiveHistory, vix:state.vix, yield10:state.yield10, equity:state.account?.equity, activeSince: repeat ? (existingCtx?.activeSince || utcNowIso()) : utcNowIso() }, existingCtx);
+  if (!repeat) {
+    await sendEmail(`⚠ ORACLE DEFCON 2 — ${trigger.reason.slice(0,50)}`,
+      `DEFCON 2 — APPROVAL RECOMMENDED\n\nTRIGGER: ${trigger.reason}\n\nORACLE RECOMMENDATION:\n${response}\n\n${etNow().toLocaleString()} ET\nOracle is watching.`);
+  }
 }
 
 async function fireDefcon3(trigger, state, existingCtx) {
   if (onCooldown("DEFCON3")) { log(`DEFCON 3 on cooldown — skipping: ${trigger.reason}`); return; }
   setCooldown("DEFCON3");
   log(`ℹ DEFCON 3 FLAGGED — ${trigger.reason}`);
-  await writeOracleContext({ defconLevel:3, defconTrigger:trigger.reason, defconDirective:`Advisory flag: ${trigger.reason}. Savant should weight this in next directive.`, vix:state.vix, yield10:state.yield10, equity:state.account?.equity, activeSince:utcNowIso() }, existingCtx);
+  await writeOracleContext({ defconLevel:3, defconKey:trigger.key || null, defconTrigger:trigger.reason, defconDirective:`Advisory flag: ${trigger.reason}. Savant should weight this in next directive.`, directiveHistory:state.directiveHistory, vix:state.vix, yield10:state.yield10, equity:state.account?.equity, activeSince:utcNowIso() }, existingCtx);
   await sendEmail(`ℹ ORACLE DEFCON 3 — ${trigger.reason.slice(0,50)}`,
     `DEFCON 3 — ADVISORY FLAG\n\n${trigger.reason}\n\nFlagged for Savant's next briefing. No immediate action required.\n\n${etNow().toLocaleString()} ET\nOracle is watching.`);
 }
@@ -1196,7 +1235,7 @@ async function mainLoop() {
     const arch = await runAdaptiveArchitect(state);
     if (arch) {
       log(`🏛 Architect: ${arch.signals.join(" | ")}`);
-      await writeOracleContext({ architectSignals:arch.signals, architectRecommendation:arch.recommendation, vix, yield10, equity:account?.equity }, existingCtx);
+      await writeOracleContext({ architectSignals:arch.signals, architectRecommendation:arch.recommendation, directiveHistory, vix, yield10, equity:account?.equity }, existingCtx);
       contextWriteOccurred = true;
     }
 
@@ -1330,4 +1369,18 @@ async function boot() {
   );
 }
 
-boot().catch(e => { console.error("ORACLE FATAL:", e.message); process.exit(1); });
+// Only boot when run directly. Guarding this keeps the pure alert/history logic unit-testable:
+// require()ing this module must not start intervals, network calls or gist writes.
+if (require.main === module) {
+  boot().catch(e => { console.error("ORACLE FATAL:", e.message); process.exit(1); });
+}
+
+module.exports = {
+  checkSentinel,
+  isRepeatStandingAlert,
+  updateDirectiveHistory,
+  countConsecutiveSameDirective,
+  buildOracleContextPayload,
+  STANDING_REMINDER_MS,
+  COOLDOWN_MS,
+};
