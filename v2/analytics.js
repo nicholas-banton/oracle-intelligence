@@ -220,9 +220,15 @@ function scoreMatureJudgments(history = [], horizon = 5) {
 
 function mandateSummary(history = [], window = 20) {
   const rows = (history || []).slice(-window);
+  // A session observation counts only when it is genuinely available. `null`/missing means
+  // "not measured" and must never be read as the number 0 — `finite(null)` is true because
+  // `Number(null) === 0`, which previously inflated `sessions` with records that have no
+  // session at all. A genuine 0 stays valid; NaN/Infinity/nonnumeric remain ineligible
+  // because n() returns its null fallback for them.
+  const observation = v => (v == null || v === "" ? null : n(v));
   const pairs = rows
-    .map(x => ({ b: n(x?.session?.qqqReturnPct), p: n(x?.session?.equityReturnPct) }))
-    .filter(x => finite(x.b) && finite(x.p));
+    .map(x => ({ b: observation(x?.session?.qqqReturnPct), p: observation(x?.session?.equityReturnPct) }))
+    .filter(x => x.b != null && x.p != null);
   const paired = pairs.length;
   if (paired < 5) return { status: "insufficient_data", sessions: paired };
 

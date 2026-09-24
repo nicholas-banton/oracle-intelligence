@@ -78,4 +78,47 @@ function series(start, changes) {
   assert(m.downsideCapturePct > 40 && m.downsideCapturePct < 60);
 })();
 
+(function mandateUnavailableTests(){
+  // A session-less record (the Sept 23 bootstrap pattern) must NOT count as a paired session.
+  const sessionless=[{id:"2026-09-23",asOf:"2026-09-23",bootstrap:{completedAt:"2026-09-23T20:53:36Z"}}];
+  assert.equal(mandateSummary(sessionless,20).sessions,0);
+  assert.equal(mandateSummary(sessionless,20).status,"insufficient_data");
+
+  // null on either side means "not measured" — never the number 0.
+  assert.equal(mandateSummary([{session:{qqqReturnPct:null,equityReturnPct:0.5}}],20).sessions,0);
+  assert.equal(mandateSummary([{session:{qqqReturnPct:0.5,equityReturnPct:null}}],20).sessions,0);
+  assert.equal(mandateSummary([{session:{qqqReturnPct:null,equityReturnPct:null}}],20).sessions,0);
+  assert.equal(mandateSummary([{session:{}}],20).sessions,0);
+
+  // NaN / Infinity / nonnumeric are ineligible.
+  assert.equal(mandateSummary([{session:{qqqReturnPct:NaN,equityReturnPct:0.5}}],20).sessions,0);
+  assert.equal(mandateSummary([{session:{qqqReturnPct:Infinity,equityReturnPct:0.5}}],20).sessions,0);
+  assert.equal(mandateSummary([{session:{qqqReturnPct:"abc",equityReturnPct:0.5}}],20).sessions,0);
+
+  // A genuine 0 is a valid observation, on both sides.
+  assert.equal(mandateSummary([{session:{qqqReturnPct:0,equityReturnPct:0}}],20).sessions,1);
+
+  // A genuinely paired record counts.
+  assert.equal(mandateSummary([{session:{qqqReturnPct:1.2,equityReturnPct:0.9}}],20).sessions,1);
+
+  // Mixed: only the genuinely complete observations count.
+  const mixed=[
+    {id:"a"},                                                   // no session at all
+    {id:"b",session:{qqqReturnPct:null,equityReturnPct:0.4}},    // b unavailable
+    {id:"c",session:{qqqReturnPct:0.4}},                         // p missing
+    {id:"d",session:{qqqReturnPct:-0.5,equityReturnPct:-0.3}},   // complete
+    {id:"e",session:{qqqReturnPct:0,equityReturnPct:0}},         // complete (real zeros)
+  ];
+  assert.equal(mandateSummary(mixed,20).sessions,2);
+
+  // REGRESSION: the real Sept 23 + Sept 24 pair must report 1, not 2.
+  // Sept 23 is a bootstrap-only record with no session; it previously passed the
+  // `finite(null)===true` filter and inflated the count.
+  const real=[
+    {id:"2026-09-23",bootstrap:{completedAt:"2026-09-23T20:53:36Z"}},
+    {id:"2026-09-24",session:{qqqReturnPct:-0.014846856283168286,equityReturnPct:-0.30799236927706586}},
+  ];
+  assert.equal(mandateSummary(real,20).sessions,1);
+})();
+
 console.log("Oracle v2 tests: PASS");
