@@ -135,5 +135,57 @@ function t(name, fn) { fn(); passed++; console.log("  PASS  " + name); }
     assert.equal(ev.key, undefined);
   });
 
+  // ── context preservation — the dedup key must survive partial writes ────────────────
+  console.log("\ncontext preservation across partial writes");
+
+  const alertCtx = {
+    defconLevel: 2,
+    defconKey: key,
+    defconTrigger: "Same directive (DEFENSIVE) for 8 consecutive days",
+    defconDirective: "reduce risk",
+    activeSince: new Date(Date.now() - 2 * HOUR).toISOString(),
+    directiveHistory: hist(8),
+  };
+
+  t("REGRESSION: an Architect-style write preserves the active-alert identity", () => {
+    // The architect payload sets none of the defcon* fields. Before the fix, this write
+    // silently dropped defconKey, so the guard saw no prior alert and the email re-fired
+    // every cooldown window (observed in production on 2026-09-25).
+    const payload = buildOracleContextPayload({ architectSignals: ["x"], architectRecommendation: "y" }, alertCtx);
+    assert.equal(payload.defconKey, key, "defconKey must be carried forward");
+    assert.equal(payload.defconLevel, 2);
+    assert.equal(payload.defconTrigger, alertCtx.defconTrigger);
+    assert.equal(payload.defconDirective, "reduce risk");
+    assert.equal(payload.activeSince, alertCtx.activeSince);
+  });
+
+  t("a Scenario-style write preserves the active-alert identity", () => {
+    const payload = buildOracleContextPayload({ scenarioPlan: "p", scenarioMatrix: { stability: "stable" } }, alertCtx);
+    assert.equal(payload.defconKey, key);
+    assert.equal(payload.activeSince, alertCtx.activeSince);
+  });
+
+  t("after an Architect write the dedup guard still suppresses the repeat", () => {
+    const payload = buildOracleContextPayload({ architectSignals: ["x"] }, alertCtx);
+    assert.equal(isRepeatStandingAlert({ key }, payload), true, "guard must still see the same condition");
+  });
+
+  t("a baseline write still CLEARS the alert (so a recurrence re-arms)", () => {
+    const payload = buildOracleContextPayload({ defconLevel: null, defconTrigger: null, defconDirective: null, defconKey: null }, alertCtx);
+    assert.equal(payload.defconKey, null, "explicit null in ctx must override the preserved value");
+    assert.equal(isRepeatStandingAlert({ key }, payload), false);
+  });
+
+  t("a DEFCON write sets the identity, overriding any preserved value", () => {
+    const payload = buildOracleContextPayload({ defconLevel: 2, defconKey: "same_directive:REDUCED_RISK" }, alertCtx);
+    assert.equal(payload.defconKey, "same_directive:REDUCED_RISK");
+  });
+
+  t("missing alert fields are not fabricated into the payload", () => {
+    const payload = buildOracleContextPayload({ architectSignals: ["x"] }, { directiveHistory: [] });
+    assert.equal(payload.defconKey, null);
+    assert.equal(payload.defconLevel, null);
+  });
+
   console.log(`\nOracle DEFCON cadence tests: PASS (${passed} checks)`);
 })().catch(e => { console.error("\nOracle DEFCON cadence tests: FAIL\n" + (e.stack || e.message)); process.exit(1); });

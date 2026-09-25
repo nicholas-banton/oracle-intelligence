@@ -289,6 +289,16 @@ function buildOracleContextPayload(ctx, existingCtx = null) {
       : [],
     lastScenarioExpiredAt: existingCtx.lastScenarioExpiredAt || null,
     lastScenarioExpiredReason: existingCtx.lastScenarioExpiredReason || null,
+    // Active-alert identity must survive ANY partial write. Without these, a non-DEFCON write
+    // (Adaptive Architect, Scenario) silently dropped defconKey/defconLevel/defconTrigger/
+    // activeSince, so the standing-condition de-duplication guard saw no prior alert and the
+    // DEFCON 2 email re-fired every cooldown window. A baseline write still clears them because
+    // buildBaselineOracleContext sets them explicitly and ctx overrides preserved.
+    defconLevel:       existingCtx.defconLevel ?? null,
+    defconTrigger:     existingCtx.defconTrigger ?? null,
+    defconDirective:   existingCtx.defconDirective ?? null,
+    defconKey:         existingCtx.defconKey ?? null,
+    activeSince:       existingCtx.activeSince ?? null,
   } : {};
 
   return {
