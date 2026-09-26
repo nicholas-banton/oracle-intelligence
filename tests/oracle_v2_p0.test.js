@@ -5,8 +5,9 @@
 // P0-1 null-safe independent market read
 // P0-2 null-preserving derived spreads
 // P0-3 immutable completed-phase evidence across restart/bootstrap
+// P0-4 residual null-coercion paths (VIX / rolling vol / correlation / forward outcome)
 const assert = require("assert");
-const { independentMarketRead, buildMarketMetrics } = require("../v2/analytics");
+const { independentMarketRead, buildMarketMetrics, rollingVol, correlation, scoreMatureJudgments } = require("../v2/analytics");
 const { buildBootstrapRecord, hasCompletedPhase } = require("../oracle_v2");
 const { upsertRecord } = require("../v2/ledger");
 
@@ -193,6 +194,88 @@ t("no duplicate daily record is created by the restart", () => {
 t("frozen record still preserves the pre-open evidence strings verbatim", () => {
   const rec = buildBootstrapRecord(PRE_ONLY, BASE, "z");
   assert.deepStrictEqual(rec.independentRead.evidence, ["pre-open evidence"]);
+});
+
+console.log("\nP0-4 residual null-coercion paths (VIX / rolling vol / correlation / forward outcome)");
+
+function withLastClose(s, close) { const out = s.slice(); out[out.length - 1] = { close }; return out; }
+// A deterministic series with genuinely varying (but small) returns, so volatility and
+// correlation are non-degenerate. A manufacturing bug injects a -100% step and stands out.
+function wobble(n) {
+  const out = [{ close: 100 }]; let v = 100;
+  for (let i = 1; i < n; i++) { v *= (1 + (i % 2 ? 0.002 : -0.001)); out.push({ close: v }); }
+  return out;
+}
+function judgedRows() {
+  const rows = [];
+  for (let i = 0; i < 7; i++) {
+    rows.push({ id: `d${i}`, asOf: `2026-01-0${i + 1}`, market: { QQQ: { close: 100 + i } }, audit: { challengeType: "possible_excessive_defensiveness" } });
+  }
+  return rows;
+}
+
+t("latest VIX close null -> buildMarketMetrics().vix is null (never numeric 0)", () => {
+  const m = buildMarketMetrics(market({ VIX: withLastClose(series(70, 15), null) }));
+  assert.strictEqual(m.vix, null, "an unavailable VIX must stay null, not become numeric 0");
+});
+
+t("null latest VIX emits NO VIX evidence or counter-evidence", () => {
+  const full = independentMarketRead(buildMarketMetrics(market()));
+  const r = independentMarketRead(buildMarketMetrics(market({ VIX: withLastClose(series(70, 15), null) })));
+  const all = r.evidence.concat(r.counterEvidence).join(" | ");
+  assert(!/VIX/i.test(all), "no fabricated VIX evidence: " + all);
+  assert.equal(Number((full.score - r.score).toFixed(2)), 1.0, "null VIX must make NO contribution (3.44 - 1.0)");
+});
+
+t("genuine numeric VIX 0 stays exactly 0 and is NOT treated as missing", () => {
+  const full = independentMarketRead(buildMarketMetrics(market()));
+  const m = buildMarketMetrics(market({ VIX: withLastClose(series(70, 15), 0) }));
+  assert.strictEqual(m.vix, 0, "a real 0 is a valid measurement, distinct from null");
+  const r = independentMarketRead(m);
+  assert(r.evidence.some(x => /VIX is below acute-stress territory \(0\.0\)/.test(x)), "0 is measured and reaches the low-VIX branch: " + r.evidence.join(" | "));
+  assert.equal(r.score, full.score, "a genuine 0 VIX contributes exactly like the measured low VIX");
+});
+
+t("rollingVol: a null close does NOT manufacture a -100% return", () => {
+  const base = wobble(30);
+  const holed = wobble(30);
+  holed[25] = { close: null }; // inside the last (sessions+1) window that rollingVol evaluates
+  const vb = rollingVol(base, 10);
+  const vh = rollingVol(holed, 10);
+  assert(Number.isFinite(vb) && Number.isFinite(vh), "valid measured pairs remain usable");
+  assert(vh < 10, "a synthesized -100% return would blow this up (got " + vh + ")");
+  assert(Math.abs(vh - vb) < 1.5, "dropping the unavailable pair must not distort the measured series");
+});
+
+t("correlation: a null close does not manufacture synthetic returns", () => {
+  const clean = wobble(30);
+  const holed = wobble(30);
+  holed[15] = { close: null };
+  const cc = correlation(clean, clean, 20);
+  const ch = correlation(holed, clean, 20);
+  assert(Number.isFinite(cc) && Math.abs(cc - 1) < 1e-9, "control: identical measured series correlate perfectly");
+  assert(Number.isFinite(ch), "only genuinely measured paired returns participate");
+  assert(Math.abs(ch - 1) < 1e-9, "a null close must be excluded, never synthesized as -100%");
+});
+
+t("forwardOutcome: a null horizon QQQ close leaves the judgment unscored", () => {
+  const rows = judgedRows();
+  rows[5].market.QQQ.close = null; // horizon (index 0 + 5) is unavailable
+  const scored = scoreMatureJudgments(rows, 5);
+  assert.strictEqual(scored[0].score, undefined, "an unavailable horizon must NOT be scored as a synthetic return");
+});
+
+t("forwardOutcome: a null base QQQ close leaves the judgment unscored", () => {
+  const rows = judgedRows();
+  rows[0].market.QQQ.close = null; // base is unavailable
+  const scored = scoreMatureJudgments(rows, 5);
+  assert.strictEqual(scored[0].score, undefined, "an unavailable base must NOT be scored");
+});
+
+t("forwardOutcome: a fully measured judgment still scores (control)", () => {
+  const scored = scoreMatureJudgments(judgedRows(), 5);
+  assert.equal(scored[0].score.status, "scored");
+  assert.equal(scored[0].score.qqqForwardReturnPct, 5, "105 vs 100 = +5%");
 });
 
 console.log("");

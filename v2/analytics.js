@@ -1,16 +1,22 @@
 "use strict";
 
 function finite(v) { return Number.isFinite(Number(v)); }
-function n(v, fallback = null) { return finite(v) ? Number(v) : fallback; }
+// An "actually measured" observation: present, non-empty, and finite. `finite(null)` is true
+// because `Number(null) === 0`, so `finite()` alone cannot distinguish a genuine 0 from a
+// missing value. This predicate owns that invariant for the whole module.
+function measured(v) { return v != null && v !== "" && finite(v); }
+function n(v, fallback = null) { return measured(v) ? Number(v) : fallback; }
 // A derived spread exists only when BOTH legs are actually-measured finite observations.
 // `finite(null)` is true because `Number(null) === 0`, so a single missing leg previously
 // participated in the arithmetic and turned absent data into a real spread
 // (e.g. rsp5 = null, spy5 = 0.50 produced -0.50 instead of null). A genuine 0 leg is valid.
-function spread(a, b) { return a != null && b != null && finite(a) && finite(b) ? a - b : null; }
+function spread(a, b) {
+  return measured(a) && measured(b) ? a - b : null;
+}
 function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 
 function pct(a, b) {
-  if (!finite(a) || !finite(b) || Number(b) === 0) return null;
+  if (!measured(a) || !measured(b) || Number(b) === 0) return null;
   return ((Number(a) / Number(b)) - 1) * 100;
 }
 
@@ -32,7 +38,7 @@ function rollingVol(series, sessions = 20) {
   const rets = [];
   for (let i = 1; i < slice.length; i++) {
     const r = pct(slice[i].close, slice[i - 1].close);
-    if (finite(r)) rets.push(r / 100);
+    if (measured(r)) rets.push(r / 100);
   }
   if (rets.length < 2) return null;
   const mean = rets.reduce((a, b) => a + b, 0) / rets.length;
@@ -59,7 +65,7 @@ function correlation(aSeries, bSeries, sessions = 20) {
   for (let i = 1; i < len; i++) {
     const ai = pct(a[a.length - len + i].close, a[a.length - len + i - 1].close);
     const bi = pct(b[b.length - len + i].close, b[b.length - len + i - 1].close);
-    if (finite(ai) && finite(bi)) { ar.push(ai); br.push(bi); }
+    if (measured(ai) && measured(bi)) { ar.push(ai); br.push(bi); }
   }
   if (ar.length < 6) return null;
   const am = ar.reduce((x, y) => x + y, 0) / ar.length;
@@ -119,7 +125,7 @@ function independentMarketRead(metrics = {}) {
   // templates below and call `null.toFixed(...)`, crashing the pre-open phase. An unavailable
   // metric makes NO contribution — the same neutral outcome `add()` already gives `cond == null`.
   // A genuine numeric 0 stays a valid measurement. Weights and thresholds are unchanged.
-  const measured = v => v != null && finite(v);
+  // The module-level `measured()` predicate owns this invariant.
 
   if (measured(metrics.qqq20)) add(metrics.qqq20 > 0, 1.25, `QQQ 20-session trend is positive (${metrics.qqq20.toFixed(1)}%)`, `QQQ 20-session trend is negative (${metrics.qqq20.toFixed(1)}%)`);
   if (measured(metrics.spy20)) add(metrics.spy20 > 0, 0.75, `SPY 20-session trend is positive (${metrics.spy20.toFixed(1)}%)`, `SPY 20-session trend is negative (${metrics.spy20.toFixed(1)}%)`);
@@ -203,7 +209,7 @@ function consecutiveDirectiveDays(history = [], currentDirective) {
 function forwardOutcome(history = [], index, horizon = 5) {
   const base = history[index]?.market?.QQQ?.close;
   const end = history[index + horizon]?.market?.QQQ?.close;
-  if (!finite(base) || !finite(end)) return null;
+  if (!measured(base) || !measured(end)) return null;
   return pct(end, base);
 }
 
@@ -214,7 +220,7 @@ function scoreMatureJudgments(history = [], horizon = 5) {
     if (row?.score?.status === "scored") continue;
     if (!row?.audit?.challengeType || row.audit.challengeType === "aligned" || row.audit.challengeType === "uncertain_regime") continue;
     const fwd = forwardOutcome(out, i, horizon);
-    if (fwd == null || !finite(fwd)) continue;
+    if (!measured(fwd)) continue;
 
     let supported = null;
     if (row.audit.challengeType === "possible_excessive_defensiveness") supported = fwd > 1.5;
